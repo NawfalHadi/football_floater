@@ -49,12 +49,34 @@ _EXPERIMENTAL = {
     "ICON_BADGE_RIM": "#C8C8CE",
 }
 
+# macOS / visionOS material: cool frosted charcoal, hairline light rim,
+# system blue/cyan/green/red. Opaque fill — chroma key cannot blur the pitch.
+_GLASS = {
+    "PANEL_BG": "#2C2C2E",
+    "PANEL_RIM": "#EBEBF0",
+    "BTN_BG": "#3A3A3C",
+    "BTN_RIM": "#636366",
+    "DIVIDER": "#48484A",
+    "TEXT_COLOR": "#F5F5F7",
+    "MUTED": "#D1D1D6",
+    "PL_PURPLE": "#5E5CE6",
+    "PL_GREEN": "#30D158",
+    "PL_PINK": "#FF375F",
+    "CLOCK_LIVE": "#64D2FF",
+    "CARD_YELLOW": "#FFD60A",
+    "DANGER": "#FF453A",
+    "ICON_BADGE": "#F5F5F7",
+    "ICON_BADGE_RIM": "#D1D1D6",
+}
+
 THEMES = {
-    "default": {"label": "Default", "colors": _DEFAULT},
+    "default": {"label": "Default", "colors": _DEFAULT, "sheen": 70},
     "experimental": {
         "label": "Experimental — PL × Bundesliga",
         "colors": _EXPERIMENTAL,
+        "sheen": 70,
     },
+    "glass": {"label": "Glass — macOS", "colors": _GLASS, "sheen": 150},
 }
 ACTIVE = "default"
 
@@ -73,6 +95,7 @@ CARD_YELLOW = _DEFAULT["CARD_YELLOW"]
 DANGER = _DEFAULT["DANGER"]
 ICON_BADGE = _DEFAULT["ICON_BADGE"]
 ICON_BADGE_RIM = _DEFAULT["ICON_BADGE_RIM"]
+GLASS_SHEEN = 70
 
 def _hex_rgb(h):
     h = h.lstrip("#")
@@ -106,7 +129,10 @@ def make_glass(width, height, radius=None, accent=None):
     )
     hl = Image.new("RGBA", size, (0, 0, 0, 0))
     ImageDraw.Draw(hl).rounded_rectangle(
-        (1, 1, width - 2, height - 2), radius=max(1, radius - 1), outline=(255, 255, 255, 70), width=1
+        (1, 1, width - 2, height - 2),
+        radius=max(1, radius - 1),
+        outline=(255, 255, 255, GLASS_SHEEN),
+        width=1,
     )
     top = Image.new("L", size, 0)
     ImageDraw.Draw(top).rectangle((0, 0, width, max(4, height // 3)), fill=255)
@@ -124,6 +150,18 @@ def make_glass(width, height, radius=None, accent=None):
 def _button_styles():
     # Default keeps the current dock colors. Experimental stays soft,
     # just tinted so each action is still distinct on a match broadcast.
+    if ACTIVE == "glass":
+        return {
+            "default": (BTN_BG, "#8E8E93", TEXT_COLOR),
+            "muted": (BTN_BG, BTN_RIM, MUTED),
+            "danger": ("#3A2024", "#FF453A", "#FFD6D3"),
+            "on": ("#14301E", "#30D158", "#E5FFEE"),
+            "busy": ("#3A3014", "#FFD60A", "#FFF6CC"),
+            "refresh": ("#12304A", "#0A84FF", "#D6ECFF"),
+            "test": ("#3A2A14", "#FF9F0A", "#FFE7C2"),
+            "settings": ("#24244A", "#5E5CE6", "#E8E7FF"),
+            "hidden": (BTN_BG, BTN_RIM, MUTED),
+        }
     if ACTIVE != "experimental":
         return {
             "default": (BTN_BG, BTN_RIM, TEXT_COLOR),
@@ -154,7 +192,7 @@ BUTTON_STYLES = _button_styles()
 
 def apply_theme(name):
     """Switch palette. Patches modules that did `from theme import COLOR`."""
-    global ACTIVE, BUTTON_STYLES
+    global ACTIVE, BUTTON_STYLES, GLASS_SHEEN
     global PANEL_BG, PANEL_RIM, BTN_BG, BTN_RIM, DIVIDER, TEXT_COLOR, MUTED
     global PL_PURPLE, PL_GREEN, PL_PINK, CLOCK_LIVE, CARD_YELLOW, DANGER
     global ICON_BADGE, ICON_BADGE_RIM
@@ -163,6 +201,7 @@ def apply_theme(name):
         name = "default"
     colors = THEMES[name]["colors"]
     ACTIVE = name
+    GLASS_SHEEN = int(THEMES[name].get("sheen", 70))
     g = globals()
     for key, value in colors.items():
         g[key] = value

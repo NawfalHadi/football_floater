@@ -130,7 +130,7 @@ Colors: blue refresh, amber test, green when float on, purple settings, red quit
 Shown **every app open** unless **Don't ask next time** is checked.
 
 - **Leagues:** Premier League (`eng.1`), Bundesliga (`ger.1`) — multi-select with league logos
-- **Theme:** `default` (current glass) or `experimental` (PL × Bundesliga scorebug — dark opaque panel, light rim, mint live clock). Saved in `settings.json`.
+- **Theme:** `default` (current glass), `experimental` (PL × Bundesliga scorebug), or `glass` (macOS frosted material — cool gray, light hairline, system cyan clock). Saved in `settings.json`. Panels stay opaque; chroma key cannot blur the pitch.
 - **Match types:** Past / Live / Future (matchday window)
 - **Display:** detected monitors (Windows API / xrandr / Gdk / Tk fallback). Default radio = OS **primary** until user picks. Free-float pills also spawn on that screen’s bottom-right.
 - Opt-out checkbox; reopen anytime via **Settings**
