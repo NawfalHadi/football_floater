@@ -34,7 +34,7 @@ from .config import (
     TICKER_W,
 )
 from .espn import scoreboard_url, summary_url
-from .matchday import in_matchday, matchday_window, parse_espn_dt
+from .matchday import countdown_text, in_matchday, matchday_window, parse_espn_dt
 from .monitors import get_monitor, list_monitors
 from .overlay import clock_color, setup_overlay
 from .theme import (
@@ -85,15 +85,17 @@ class SmartTicker:
         self.running = True
         self.hover_ticker = False
         self.scroll_locked = False
+        self._clock_labels = []
+        self._countdown_ms = 0
         self._move_off = (0, 0)
 
         self.setup_ticker_window()
         self.timeline = TimelinePanel(self)
         self.dock = ControlDock(self)
+        self.apply_display_layout(force=False)
 
         # Every launch: ask leagues/filters/display unless user opted out
         if self.settings.get("skip_startup_dialog") and self.settings.get("filters_set"):
-            self.apply_display_layout(force=False)
             threading.Thread(target=self.update_data_loop, daemon=True).start()
         else:
             StartupSettingsDialog(self, startup=True)
@@ -200,26 +202,48 @@ class SmartTicker:
             w.bind("<ButtonPress-1>", self.start_move)
             w.bind("<B1-Motion>", self.do_move)
 
-        # Temporary place; apply_display_layout() runs after dock exists / dialog save
+        # Temporary place; apply_display_layout() keeps a saved spot that is still on a screen
         mon = get_monitor(self.settings.get("monitor_index"), self.root)
-        self.root.geometry(
-            f"{TICKER_W}x{TICKER_H}+{mon['x'] + (mon['w'] - TICKER_W) // 2}+{mon['y'] + 80}"
-        )
+        pos = self.settings.get("ticker_pos")
+        if pos and len(pos) >= 2 and self.spot_on_screen(pos[0], pos[1], TICKER_W, TICKER_H):
+            tx, ty = int(pos[0]), int(pos[1])
+        else:
+            tx = mon["x"] + (mon["w"] - TICKER_W) // 2
+            ty = mon["y"] + 80
+        self.root.geometry(f"{TICKER_W}x{TICKER_H}+{tx}+{ty}")
 
     def selected_monitor(self):
         return get_monitor(self.settings.get("monitor_index"), self.root)
 
+    def spot_on_screen(self, x, y, w, h):
+        """True when enough of the window still sits on a connected display."""
+        try:
+            x, y, w, h = int(x), int(y), int(w), int(h)
+        except (TypeError, ValueError):
+            return False
+        if w < 1 or h < 1:
+            return False
+        monitors = list_monitors(self.root)
+        if not monitors:
+            return True
+        need_w, need_h = min(48, w), min(24, h)
+        for mon in monitors:
+            visible_w = min(x + w, mon["x"] + mon["w"]) - max(x, mon["x"])
+            visible_h = min(y + h, mon["y"] + mon["h"]) - max(y, mon["y"])
+            if visible_w >= need_w and visible_h >= need_h:
+                return True
+        return False
+
     def apply_display_layout(self, force=False):
-        """Place ticker + control dock on the chosen monitor."""
+        """Restore ticker and dock. A spot off every screen goes back to the default on the chosen monitor."""
         mon = self.selected_monitor()
         pos = self.settings.get("ticker_pos")
-        use_saved = (
+        if (
             not force
             and pos
-            and mon["x"] <= int(pos[0]) < mon["x"] + mon["w"]
-            and mon["y"] <= int(pos[1]) < mon["y"] + mon["h"]
-        )
-        if use_saved:
+            and len(pos) >= 2
+            and self.spot_on_screen(pos[0], pos[1], TICKER_W, TICKER_H)
+        ):
             tx, ty = int(pos[0]), int(pos[1])
         else:
             tx = mon["x"] + (mon["w"] - TICKER_W) // 2
@@ -231,21 +255,23 @@ class SmartTicker:
 
         if hasattr(self, "dock"):
             self.dock.update_idletasks()
-            cw = max(self.dock.winfo_width(), self.dock.winfo_reqwidth(), 320)
+            cw = max(self.dock.winfo_width(), self.dock.winfo_reqwidth(), 200)
+            ch = max(self.dock.winfo_height(), self.dock.winfo_reqheight(), 32)
             cpos = self.settings.get("ctrl_pos")
-            use_c = (
+            if (
                 not force
                 and cpos
-                and mon["x"] <= int(cpos[0]) < mon["x"] + mon["w"]
-                and mon["y"] <= int(cpos[1]) < mon["y"] + mon["h"]
-            )
-            if use_c:
+                and len(cpos) >= 2
+                and self.spot_on_screen(cpos[0], cpos[1], cw, ch)
+            ):
                 dx, dy = int(cpos[0]), int(cpos[1])
             else:
-                dx = mon["x"] + (mon["w"] - cw) // 2
+                dx = mon["x"] + max(0, (mon["w"] - cw) // 2)
                 dy = ty + TICKER_H + ROW_GAP
-                self.settings["ctrl_pos"] = [dx, dy]
-            self.dock.geometry(f"+{dx}+{dy}")
+                dx = min(max(dx, mon["x"]), mon["x"] + mon["w"] - min(cw, mon["w"]))
+                dy = min(max(dy, mon["y"]), mon["y"] + mon["h"] - min(ch, mon["h"]))
+                self.settings["ctrl_pos"] = [int(dx), int(dy)]
+            self.dock.geometry(f"+{int(dx)}+{int(dy)}")
         self.save_settings()
 
     def restyle(self):
@@ -296,6 +322,7 @@ class SmartTicker:
             self.ticker_frame.place(x=self.scroll_x, y=0, relheight=1.0)
         self.check_expired_alerts()
         self.sync_bubbles()
+        self.tick_countdowns()
         self.timeline.sync_follow()
         self.root.after(ANIMATION_SPEED, self.animate_ticker)
 
@@ -313,6 +340,27 @@ class SmartTicker:
                 except tk.TclError:
                     pass
         self.active_bubbles = kept
+
+    def tick_countdowns(self):
+        self._countdown_ms += ANIMATION_SPEED
+        if self._countdown_ms < 1000:
+            return
+        self._countdown_ms = 0
+        for label, match in self._clock_labels:
+            if match.get("state") != "pre":
+                continue
+            text = countdown_text(match.get("kickoff"))
+            if not text:
+                continue
+            try:
+                if label.cget("text") != text:
+                    label.configure(text=text, fg=clock_color(text))
+            except tk.TclError:
+                pass
+        for pill in self.match_pills.values():
+            pill.refresh_countdown()
+        if self.timeline.is_open:
+            self.timeline.refresh_countdown()
 
     def _avoid_rects(self):
         rects = []
@@ -851,7 +899,7 @@ class SmartTicker:
     def goal_text(m):
         goals = [e for e in m["history_list"] if e["type"] in ("goal", "penalty")]
         if not goals:
-            return ""
+            return "", ""
         g = goals[-1]
         return f"{g['player']} {g['time']}", (g.get("assist") or "")
 
@@ -958,6 +1006,7 @@ class SmartTicker:
             return
 
         id_to_item = {}
+        self._clock_labels = []
         for i, m in enumerate(matches):
             item = tk.Frame(self.ticker_frame, bg=PANEL_BG, cursor="hand2")
             item.pack(side=tk.LEFT, padx=12, fill=tk.Y)
@@ -976,8 +1025,11 @@ class SmartTicker:
                         font=FONT_SCORE,
                     )
                     score.pack()
+                    clock_text = m["time"]
+                    if m.get("state") == "pre":
+                        clock_text = countdown_text(m.get("kickoff")) or m["time"]
                     clock = tk.Label(
-                        mid_box, text=m["time"], bg=PANEL_BG, fg=clock_color(m["time"]), font=FONT_SMALL
+                        mid_box, text=clock_text, bg=PANEL_BG, fg=clock_color(clock_text), font=FONT_SMALL
                     )
                     clock.pack()
                     league = tk.Label(
@@ -985,6 +1037,7 @@ class SmartTicker:
                     )
                     league.pack()
                     parts += [mid_box, score, clock, league]
+                    self._clock_labels.append((clock, m))
                     continue
                 img = self.get_team_icon(m[side]["tla"], m[side]["logo"])
                 lbl = tk.Label(item, bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_TINY, bd=0)

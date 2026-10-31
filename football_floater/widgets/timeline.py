@@ -11,6 +11,7 @@ from ..config import (
     TIMELINE_LEAVE_MS,
 )
 from ..icons import event_icon
+from ..matchday import countdown_text
 from ..monitors import list_monitors
 from ..overlay import clock_color, setup_overlay
 from ..theme import CHROMA, DIVIDER, MUTED, PANEL_BG, TEXT_COLOR, make_glass
@@ -40,6 +41,7 @@ class TimelinePanel(tk.Toplevel):
         self._size = (220, 100)
         self._ph = None
         self._icon_refs = []
+        self._clock_lbl = None
         self.bg = tk.Label(self, bg=CHROMA, bd=0)
         self.bg.place(x=0, y=0)
         self.body = tk.Frame(self, bg=PANEL_BG)
@@ -218,9 +220,11 @@ class TimelinePanel(tk.Toplevel):
         tk.Label(head, text=match["away"]["tla"], bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI_BOLD, anchor="e").grid(
             row=0, column=2, sticky="e"
         )
-        tk.Label(head, text=match["time"], bg=PANEL_BG, fg=clock_color(match["time"]), font=FONT_TINY).grid(
-            row=1, column=1, pady=(2, 0)
-        )
+        clock_text = match["time"]
+        if match.get("state") == "pre":
+            clock_text = countdown_text(match.get("kickoff")) or match["time"]
+        self._clock_lbl = tk.Label(head, text=clock_text, bg=PANEL_BG, fg=clock_color(clock_text), font=FONT_TINY)
+        self._clock_lbl.grid(row=1, column=1, pady=(2, 0))
         tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(0, 6))
 
         events = self.app.match_details_cache.get(match["id"], [])
@@ -282,6 +286,21 @@ class TimelinePanel(tk.Toplevel):
         self.bg.configure(image=self._ph)
         self.body.place(x=16, y=12)
         self._place_smart()
+
+    def refresh_countdown(self):
+        if not self.is_open or self._clock_lbl is None:
+            return
+        match = next((m for m in self.app.current_matches if str(m["id"]) == str(self.match_id)), None)
+        if not match or match.get("state") != "pre":
+            return
+        text = countdown_text(match.get("kickoff"))
+        if not text:
+            return
+        try:
+            if self._clock_lbl.cget("text") != text:
+                self._clock_lbl.configure(text=text, fg=clock_color(text))
+        except tk.TclError:
+            pass
 
     def reattach_ticker_anchor(self, anchor):
         """After ticker rebuild, glue timeline back to the new chip widget."""

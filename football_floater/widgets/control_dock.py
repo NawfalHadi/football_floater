@@ -133,10 +133,11 @@ class ControlDock(tk.Toplevel):
         self.set_hidden(len(self.app.hidden_pills))
 
     def _place_default(self):
-        # Prefer apply_display_layout; this is a safe initial spot under ticker / on monitor
         pos = self.app.settings.get("ctrl_pos")
-        mon = self.app.selected_monitor()
-        if pos and mon["x"] <= int(pos[0]) < mon["x"] + mon["w"] and mon["y"] <= int(pos[1]) < mon["y"] + mon["h"]:
+        self.update_idletasks()
+        cw = self.winfo_width() or self.winfo_reqwidth() or 320
+        ch = self.winfo_height() or CTRL_H
+        if pos and len(pos) >= 2 and self.app.spot_on_screen(pos[0], pos[1], cw, ch):
             self.geometry(f"+{int(pos[0])}+{int(pos[1])}")
             return
         try:
@@ -145,13 +146,12 @@ class ControlDock(tk.Toplevel):
             tw = self.app.root.winfo_width() or TICKER_W
             th = self.app.root.winfo_height() or TICKER_H
         except tk.TclError:
+            mon = self.app.selected_monitor()
             tx = mon["x"] + (mon["w"] - TICKER_W) // 2
             ty, tw, th = mon["y"] + 80, TICKER_W, TICKER_H
-        self.update_idletasks()
-        cw = self.winfo_width() or 400
         x = tx + (tw - cw) // 2
         y = ty + th + ROW_GAP
-        self.geometry(f"+{x}+{y}")
+        self.geometry(f"+{int(x)}+{int(y)}")
 
     def toggle_minimize(self):
         self.minimized = not self.minimized

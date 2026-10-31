@@ -251,6 +251,7 @@ class StartupSettingsDialog(tk.Toplevel):
         if not (self.var_past.get() or self.var_live.get() or self.var_future.get()):
             self.var_live.set(True)
 
+        prev_mon = resolve_monitor_index(self.app.settings.get("monitor_index"), self.app.root)
         self.app.settings["leagues"] = leagues
         self.app.settings["show_past"] = self.var_past.get()
         self.app.settings["show_live"] = self.var_live.get()
@@ -262,6 +263,6 @@ class StartupSettingsDialog(tk.Toplevel):
         self.app.save_settings()
         self.destroy()
         self.app.restyle()
-        self.app.apply_display_layout(force=True)
+        self.app.apply_display_layout(force=prev_mon != int(self.var_monitor.get()))
         self.app._ensure_data_loop()
         threading.Thread(target=self.app.run_once, daemon=True).start()

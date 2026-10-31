@@ -38,6 +38,20 @@ def in_matchday(kickoff, window=None):
     return start <= kickoff < end
 
 
+def countdown_text(kickoff, now=None):
+    """Time until kickoff, always `H:MM:SS` so it does not look like a kickoff clock."""
+    if kickoff is None:
+        return None
+    if now is None:
+        now = datetime.now(kickoff.tzinfo) if kickoff.tzinfo else datetime.now()
+    remaining = int((kickoff - now).total_seconds())
+    if remaining < 0:
+        remaining = 0
+    hours, rem = divmod(remaining, 3600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+
 def parse_espn_dt(value):
     """ESPN uses ...Z; Python 3.14 strptime no longer accepts literal Z in format."""
     return datetime.fromisoformat(value.replace("Z", "+00:00"))

@@ -3,6 +3,7 @@ import tkinter as tk
 from PIL import ImageTk
 
 from ..config import DRAG_THRESHOLD, FONT_SCORE, FONT_SMALL, FONT_TINY, PILL_H, PILL_ICON, PILL_W
+from ..matchday import countdown_text
 from ..overlay import clock_color, setup_overlay
 from ..theme import CHROMA, MUTED, PANEL_BG, PL_PURPLE, TEXT_COLOR, make_glass
 
@@ -67,8 +68,23 @@ class MatchPill(tk.Toplevel):
             else:
                 lbl.configure(image="", text=match[side]["tla"])
         self.lbl_score.configure(text=f"{match['home']['score']} - {match['away']['score']}")
-        self.lbl_clock.configure(text=match["time"], fg=clock_color(match["time"]))
+        clock_text = match["time"]
+        if match.get("state") == "pre":
+            clock_text = countdown_text(match.get("kickoff")) or match["time"]
+        self.lbl_clock.configure(text=clock_text, fg=clock_color(clock_text))
         self.lbl_league.configure(text=match.get("league_short", ""))
+
+    def refresh_countdown(self):
+        if self.match.get("state") != "pre":
+            return
+        text = countdown_text(self.match.get("kickoff"))
+        if not text:
+            return
+        try:
+            if self.lbl_clock.cget("text") != text:
+                self.lbl_clock.configure(text=text, fg=clock_color(text))
+        except tk.TclError:
+            pass
 
     def _on_press(self, event):
         self._press = (event.x_root, event.y_root, self.winfo_x(), self.winfo_y())
