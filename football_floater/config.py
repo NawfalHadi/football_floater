@@ -13,7 +13,7 @@ LEAGUES = {
         "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/ger.1.png",
     },
 }
-REFRESH_RATE = 60
+REFRESH_RATE = 90
 ANIMATION_SPEED = 40
 SCROLL_STEP = 2
 ALERT_DURATION = 60  # running-text toast above the ticker
