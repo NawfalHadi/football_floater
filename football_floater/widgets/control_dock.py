@@ -67,22 +67,22 @@ class ControlDock(tk.Toplevel):
         handle.bind("<ButtonPress-1>", self._start_move)
         handle.bind("<B1-Motion>", self._do_move)
 
-        self.btn_refresh = GlassButton(self.body, "Refresh", self.app.manual_refresh, min_w=96)
+        self.btn_refresh = GlassButton(self.body, "↻  Refresh", self.app.manual_refresh, "refresh", min_w=108)
         self.btn_refresh.pack(side=tk.LEFT, padx=3)
-        GlassButton(self.body, "Test goal", self.app.run_test_notification).pack(side=tk.LEFT, padx=3)
+        GlassButton(self.body, "⚽  Test", self.app.run_test_notification, "test").pack(side=tk.LEFT, padx=3)
         self.btn_free = GlassButton(
             self.body,
-            "Float matches: On" if self.app.free_float else "Float matches: Off",
+            "▣  Float: On" if self.app.free_float else "▣  Float: Off",
             self.app.toggle_free_float,
             "on" if self.app.free_float else "muted",
-            min_w=150,
+            min_w=128,
         )
         self.btn_free.pack(side=tk.LEFT, padx=3)
-        self.btn_hidden = GlassButton(self.body, "Hidden (0)", self.app.show_hidden_menu, "muted", min_w=100)
+        self.btn_hidden = GlassButton(self.body, "⊘  Hidden 0", self.app.show_hidden_menu, "hidden", min_w=112)
         self.btn_hidden.pack(side=tk.LEFT, padx=3)
-        GlassButton(self.body, "Settings", self.app.show_settings_dialog).pack(side=tk.LEFT, padx=3)
-        GlassButton(self.body, "Minimize", self.toggle_minimize, "muted").pack(side=tk.LEFT, padx=3)
-        GlassButton(self.body, "Quit", self.app.close_app, "danger").pack(side=tk.LEFT, padx=(8, 0))
+        GlassButton(self.body, "⚙  Settings", self.app.show_settings_dialog, "settings").pack(side=tk.LEFT, padx=3)
+        GlassButton(self.body, "–  Mini", self.toggle_minimize, "muted").pack(side=tk.LEFT, padx=3)
+        GlassButton(self.body, "✕  Quit", self.app.close_app, "danger").pack(side=tk.LEFT, padx=(8, 0))
         self.set_hidden(len(self.app.hidden_pills))
 
     def _build_mini(self):
@@ -93,21 +93,21 @@ class ControlDock(tk.Toplevel):
         handle.bind("<B1-Motion>", self._do_move)
 
         h = 26
-        self.btn_refresh = GlassButton(self.body, "↻", self.app.manual_refresh, min_w=28, height=h)
+        self.btn_refresh = GlassButton(self.body, "↻", self.app.manual_refresh, "refresh", min_w=28, height=h)
         self.btn_refresh.pack(side=tk.LEFT, padx=2)
-        GlassButton(self.body, "⚽", self.app.run_test_notification, min_w=28, height=h).pack(side=tk.LEFT, padx=2)
+        GlassButton(self.body, "⚽", self.app.run_test_notification, "test", min_w=28, height=h).pack(side=tk.LEFT, padx=2)
         self.btn_free = GlassButton(
             self.body,
-            "F",
+            "▣",
             self.app.toggle_free_float,
             "on" if self.app.free_float else "muted",
             min_w=28,
             height=h,
         )
         self.btn_free.pack(side=tk.LEFT, padx=2)
-        self.btn_hidden = GlassButton(self.body, "H", self.app.show_hidden_menu, "muted", min_w=28, height=h)
+        self.btn_hidden = GlassButton(self.body, "⊘", self.app.show_hidden_menu, "hidden", min_w=28, height=h)
         self.btn_hidden.pack(side=tk.LEFT, padx=2)
-        GlassButton(self.body, "⚙", self.app.show_settings_dialog, "muted", min_w=28, height=h).pack(
+        GlassButton(self.body, "⚙", self.app.show_settings_dialog, "settings", min_w=28, height=h).pack(
             side=tk.LEFT, padx=2
         )
         GlassButton(self.body, "▢", self.toggle_minimize, "default", min_w=28, height=h).pack(side=tk.LEFT, padx=2)
@@ -145,27 +145,29 @@ class ControlDock(tk.Toplevel):
         if not hasattr(self, "btn_free"):
             return
         if self.minimized:
-            self.btn_free.set("F", "on" if self.app.free_float else "muted")
+            self.btn_free.set("▣", "on" if self.app.free_float else "muted")
         else:
-            label = "Float matches: On" if self.app.free_float else "Float matches: Off"
+            label = "▣  Float: On" if self.app.free_float else "▣  Float: Off"
             self.btn_free.set(label, "on" if self.app.free_float else "muted")
 
     def set_refresh(self, label, kind="default"):
         if hasattr(self, "btn_refresh"):
             if self.minimized and kind != "busy":
-                self.btn_refresh.set("↻", kind)
+                self.btn_refresh.set("↻", "refresh")
             elif self.minimized and kind == "busy":
                 self.btn_refresh.set("…", "busy")
+            elif kind == "busy":
+                self.btn_refresh.set("↻  …", "busy")
             else:
-                self.btn_refresh.set(label, kind)
+                self.btn_refresh.set("↻  Refresh", "refresh")
 
     def set_hidden(self, n):
         if not hasattr(self, "btn_hidden"):
             return
         if self.minimized:
-            self.btn_hidden.set("H" if n == 0 else str(n), "default" if n else "muted")
+            self.btn_hidden.set("⊘" if n == 0 else str(n), "hidden" if n == 0 else "default")
         else:
-            self.btn_hidden.set(f"Hidden ({n})", "default" if n else "muted")
+            self.btn_hidden.set(f"⊘  Hidden {n}", "hidden" if n == 0 else "default")
 
     def _start_move(self, event):
         self._move_off = (event.x_root - self.winfo_x(), event.y_root - self.winfo_y())

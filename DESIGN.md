@@ -93,7 +93,7 @@ Rules:
 | Goal popup | auto × 32 | full pill |
 | Timeline panel | auto (min 220 wide) | **16px** (tall panels must never use h/2 — it turns into an oval) |
 | Button | auto (min_w optional) × 28 | full pill |
-| Team logo | `ICON_SIZE` 24 (ticker), `PILL_ICON` 26 (pill) | circle |
+| Team logo | `ICON_SIZE` 24 (ticker), `PILL_ICON` 26 (pill) | circle on light `ICON_BADGE` disc (navy crests stay readable) |
 
 Spacing:
 - Gap between control bar and ticker: `ROW_GAP` 8
@@ -116,10 +116,10 @@ Own movable glass capsule. Default sits **under** the ticker so timelines open a
 Expanded:
 
 ```
-Live │ Refresh │ Test goal │ Float matches: Off │ Hidden (0) │ Settings │ Minimize │ Quit
+Live │ ↻ Refresh │ ⚽ Test │ ▣ Float: Off │ ⊘ Hidden 0 │ ⚙ Settings │ – Mini │ ✕ Quit
 ```
 
-Minimized (icon strip): `⋮⋮  ↻  ⚽  F  H  ⚙  ▢  ✕`
+Colors: blue refresh, amber test, green when float on, purple settings, red quit. Minimized: `⋮⋮  ↻  ⚽  ▣  ⊘  ⚙  ▢  ✕`
 
 - Drag independently of the ticker; position saved in `settings.json`.
 - **Minimize** → icons only; **▢** expands again.
@@ -130,6 +130,7 @@ Minimized (icon strip): `⋮⋮  ↻  ⚽  F  H  ⚙  ▢  ✕`
 Shown **every app open** unless **Don't ask next time** is checked.
 
 - **Leagues:** Premier League (`eng.1`), Bundesliga (`ger.1`) — multi-select with league logos
+- **Theme:** `default` (current glass) or `experimental` (PL × Bundesliga scorebug — dark opaque panel, light rim, mint live clock). Saved in `settings.json`.
 - **Match types:** Past / Live / Future (matchday window)
 - **Display:** detected monitors (Windows API / xrandr / Gdk / Tk fallback). Default radio = OS **primary** until user picks. Free-float pills also spawn on that screen’s bottom-right.
 - Opt-out checkbox; reopen anytime via **Settings**
@@ -142,12 +143,16 @@ Shown **every app open** unless **Don't ask next time** is checked.
 | `default` | grey / grey / white | Normal action |
 | `muted` | grey / grey / muted | Toggle that is off, or nothing to act on (Hidden (0)) |
 | `on` | dark green / green / green | Toggle that is on (Float matches: On) |
-| `busy` | grey / yellow / yellow | Working (Refreshing…) |
+| `busy` | amber | Working (refresh in flight) |
+| `refresh` | blue | Reload scores |
+| `test` | amber | Fire a fake goal |
+| `settings` | purple | Open settings |
+| `hidden` | grey | No hidden pills |
 | `danger` | dark red / red / red | Destructive (Quit) |
 
 - Hover: fill lightens 10%.
 - Toggle buttons use `min_w` so the width doesn't jump when the label changes.
-- Labels must state the action and, for toggles, the current state: `Float matches: On`.
+- Each action has an icon prefix plus a word. Toggles still show state: `▣  Float: On`.
 
 ### Match layout (ticker item and pill)
 

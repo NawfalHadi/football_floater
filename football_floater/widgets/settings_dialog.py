@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 from ..config import FONT_SMALL, FONT_TINY, FONT_UI, FONT_UI_BOLD, LEAGUES
 from ..matchday import matchday_window
 from ..monitors import list_monitors, resolve_monitor_index
-from ..theme import BTN_BG, MUTED, PANEL_BG, TEXT_COLOR, make_circle_icon
+from ..theme import BTN_BG, MUTED, PANEL_BG, TEXT_COLOR, THEMES, make_circle_icon
 
 
 class StartupSettingsDialog(tk.Toplevel):
@@ -94,6 +94,28 @@ class StartupSettingsDialog(tk.Toplevel):
                 self,
                 text=text,
                 variable=var,
+                bg=PANEL_BG,
+                fg=TEXT_COLOR,
+                selectcolor=BTN_BG,
+                activebackground=PANEL_BG,
+                activeforeground=TEXT_COLOR,
+                font=FONT_UI,
+                anchor="w",
+            ).pack(fill=tk.X, padx=16, pady=1)
+
+        tk.Label(self, text="Theme", bg=PANEL_BG, fg=MUTED, font=FONT_TINY).pack(
+            anchor="w", padx=16, pady=(10, 2)
+        )
+        saved_theme = app.settings.get("theme") or "default"
+        if saved_theme not in THEMES:
+            saved_theme = "default"
+        self.var_theme = tk.StringVar(value=saved_theme)
+        for key, meta in THEMES.items():
+            tk.Radiobutton(
+                self,
+                text=meta["label"],
+                variable=self.var_theme,
+                value=key,
                 bg=PANEL_BG,
                 fg=TEXT_COLOR,
                 selectcolor=BTN_BG,
@@ -201,9 +223,11 @@ class StartupSettingsDialog(tk.Toplevel):
         self.app.settings["show_future"] = self.var_future.get()
         self.app.settings["skip_startup_dialog"] = self.var_skip.get()
         self.app.settings["monitor_index"] = int(self.var_monitor.get())
+        self.app.settings["theme"] = self.var_theme.get() if self.var_theme.get() in THEMES else "default"
         self.app.settings["filters_set"] = True
         self.app.save_settings()
         self.destroy()
+        self.app.restyle()
         self.app.apply_display_layout(force=True)
         self.app._ensure_data_loop()
         threading.Thread(target=self.app.run_once, daemon=True).start()

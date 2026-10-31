@@ -46,6 +46,8 @@ from .theme import (
     PL_PINK,
     PL_PURPLE,
     TEXT_COLOR,
+    THEMES,
+    apply_theme,
     make_circle_icon,
     make_glass,
 )
@@ -73,6 +75,7 @@ class SmartTicker:
         self._hidden_labels = {}
         self.pill_positions, self.hidden_pills = self.load_pill_state()
         self.settings = self.load_settings()
+        apply_theme(self.settings.get("theme") or "default")
 
         self.scroll_x = 0
         self.content_width = 0
@@ -117,6 +120,7 @@ class SmartTicker:
             "ctrl_pos": None,
             "ticker_pos": None,
             "monitor_index": None,  # None → OS primary at runtime
+            "theme": "default",
         }
         try:
             if SETTINGS_FILE.exists():
@@ -135,6 +139,8 @@ class SmartTicker:
                 defaults["monitor_index"] = int(raw_mon)
             except (TypeError, ValueError):
                 defaults["monitor_index"] = None
+        if defaults.get("theme") not in THEMES:
+            defaults["theme"] = "default"
         return defaults
 
     def save_settings(self):
@@ -238,6 +244,27 @@ class SmartTicker:
                 self.settings["ctrl_pos"] = [dx, dy]
             self.dock.geometry(f"+{dx}+{dy}")
         self.save_settings()
+
+    def restyle(self):
+        """Repaint ticker, dock, and pills after a theme change."""
+        apply_theme(self.settings.get("theme") or "default")
+        self.image_cache.clear()
+        self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
+        self.ticker_bg.configure(image=self._ticker_ph)
+        for w in (self.ticker_body, self.clip_frame, self.ticker_frame):
+            try:
+                w.configure(bg=PANEL_BG)
+            except tk.TclError:
+                pass
+        if self.free_float:
+            self.destroy_all_pills()
+            self.sync_free_pills(self.current_matches)
+        elif self.current_matches:
+            self.render_matches(self.current_matches)
+        if getattr(self, "timeline", None) and self.timeline.is_open:
+            self.timeline.close()
+        if getattr(self, "dock", None):
+            self.dock._build()
 
     def start_move(self, event):
         self._move_off = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
@@ -770,7 +797,7 @@ class SmartTicker:
     def get_team_icon(self, tla, url, size=ICON_SIZE):
         if not url:
             return None
-        key = f"{tla}:{size}"
+        key = f"{tla}:{size}:badge"
         if key in self.image_cache:
             return self.image_cache[key]
         try:
