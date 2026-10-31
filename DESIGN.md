@@ -201,7 +201,7 @@ GOAL  M. Rogers 50'
 
 - `GOAL` in `PL_GREEN`, scorer in `TEXT_COLOR`, assist in smaller `MUTED` text underneath.
 - The popup is clamped to the monitor that holds the match, so a right-edge pill cannot push it off screen.
-- Substitutions use the same popup with a `SUB` tag, and they also appear in the timeline. The first time a live match is seen, existing subs are remembered and not toasted.
+- Substitutions use the same popup with a `SUB` tag. Subs that share a minute share one popup: the clock once, then each swap as `Name on` / `Name off`. They also appear in the timeline. The first time a live match is seen, existing subs are remembered and not toasted.
 - Floats 6px above its match (ticker item or pill). A second popup stacks above the first. Hidden when the ticker item scrolls out of view.
 - Lives `ALERT_DURATION` 60s.
 

@@ -360,7 +360,11 @@ class SmartTicker:
         for slot, key in enumerate(self._alert_keys_for(mid)):
             alert = self.active_alerts[key]
             bubble = GoalBubble(
-                self.root, alert["text"], tag=alert.get("tag", "GOAL"), detail=alert.get("detail") or ""
+                self.root,
+                alert["text"],
+                tag=alert.get("tag", "GOAL"),
+                detail=alert.get("detail") or "",
+                lines=alert.get("lines") or None,
             )
             self.active_bubbles.append([key, anchor, bubble, slot])
 
@@ -723,16 +727,31 @@ class SmartTicker:
         if seen is None:
             self.sub_seen[m["id"]] = {key for key, _s in fresh}
             return
+        fresh_by_clock = {}
+        clocks = []
         for key, s in fresh:
             if key in seen:
                 continue
             seen.add(key)
-            self.active_alerts[key] = {
-                "text": f"{s['on']} on  {s['clock']}",
-                "detail": f"{s['off']} off" if s.get("off") else "",
-                "expires": time.time() + ALERT_DURATION,
-                "tag": "SUB",
-            }
+            clock = s["clock"]
+            if clock not in fresh_by_clock:
+                fresh_by_clock[clock] = []
+                clocks.append(clock)
+            fresh_by_clock[clock].append({"on": s["on"], "off": s.get("off") or ""})
+        now = time.time()
+        for clock in clocks:
+            alert_key = f"{m['id']}|sub|{clock}"
+            existing = self.active_alerts.get(alert_key)
+            if existing and now < existing["expires"]:
+                existing["lines"].extend(fresh_by_clock[clock])
+                existing["expires"] = now + ALERT_DURATION
+            else:
+                self.active_alerts[alert_key] = {
+                    "text": clock,
+                    "lines": fresh_by_clock[clock],
+                    "expires": now + ALERT_DURATION,
+                    "tag": "SUB",
+                }
 
     def enrich_assists(self, m, score):
         goals = [e for e in m["history_list"] if e["type"] in ("goal", "penalty")]

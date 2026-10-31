@@ -8,7 +8,7 @@ from ..theme import CHROMA, CLOCK_LIVE, MUTED, PANEL_BG, PL_GREEN, TEXT_COLOR, m
 
 
 class GoalBubble(tk.Toplevel):
-    def __init__(self, master, text, tag="GOAL", detail=""):
+    def __init__(self, master, text, tag="GOAL", detail="", lines=None):
         super().__init__(master)
         setup_overlay(self, 0.96)
         self.visible = True
@@ -19,15 +19,31 @@ class GoalBubble(tk.Toplevel):
         tk.Label(body, text=tag, bg=PANEL_BG, fg=tag_color, font=FONT_TINY).pack(side=tk.LEFT, anchor="n", padx=(0, 6))
         col = tk.Frame(body, bg=PANEL_BG)
         col.pack(side=tk.LEFT, anchor="n")
-        tk.Label(
-            col, text=text, bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_TINY, anchor="w", justify="left", wraplength=200
-        ).pack(anchor="w")
-        if detail:
+        if lines:
+            tk.Label(col, text=text, bg=PANEL_BG, fg=MUTED, font=FONT_TINY, anchor="w").pack(anchor="w")
+            for i, line in enumerate(lines):
+                pair = tk.Frame(col, bg=PANEL_BG)
+                pair.pack(anchor="w", pady=(5 if i else 1, 0))
+                on_line = tk.Frame(pair, bg=PANEL_BG)
+                on_line.pack(anchor="w")
+                tk.Label(on_line, text=line.get("on") or "?", bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_TINY, anchor="w").pack(
+                    side=tk.LEFT
+                )
+                tk.Label(on_line, text=" on", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w").pack(side=tk.LEFT)
+                if line.get("off"):
+                    tk.Label(pair, text=f"{line['off']} off", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w").pack(
+                        anchor="w"
+                    )
+        else:
             tk.Label(
-                col, text=detail, bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w", justify="left", wraplength=200
+                col, text=text, bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_TINY, anchor="w", justify="left", wraplength=200
             ).pack(anchor="w")
+            if detail:
+                tk.Label(
+                    col, text=detail, bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w", justify="left", wraplength=200
+                ).pack(anchor="w")
         body.update_idletasks()
-        w = min(body.winfo_reqwidth() + 32, 280)
+        w = body.winfo_reqwidth() + 32
         h = max(32, body.winfo_reqheight() + 16)
         self._ph = ImageTk.PhotoImage(make_glass(w, h))
         bg.configure(image=self._ph)
