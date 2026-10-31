@@ -15,6 +15,7 @@ from .config import (
     ALERT_DURATION,
     ANIMATION_SPEED,
     DRAG_THRESHOLD,
+    FLOAT_ALERT_DURATION,
     FONT_SCORE,
     FONT_SMALL,
     FONT_TINY,
@@ -326,6 +327,10 @@ class SmartTicker:
         self.tick_countdowns()
         self.timeline.sync_follow()
         self.root.after(ANIMATION_SPEED, self.animate_ticker)
+
+    def _alert_ttl(self):
+        """Ticker toasts stay longer; float toasts clear faster so they do not cover the pitch."""
+        return FLOAT_ALERT_DURATION if self.free_float else ALERT_DURATION
 
     def check_expired_alerts(self):
         now = time.time()
@@ -862,17 +867,18 @@ class SmartTicker:
                 clocks.append(clock)
             fresh_by_clock[clock].append({"on": s["on"], "off": s.get("off") or ""})
         now = time.time()
+        ttl = self._alert_ttl()
         for clock in clocks:
             alert_key = f"{m['id']}|sub|{clock}"
             existing = self.active_alerts.get(alert_key)
             if existing and now < existing["expires"]:
                 existing["lines"].extend(fresh_by_clock[clock])
-                existing["expires"] = now + ALERT_DURATION
+                existing["expires"] = now + ttl
             else:
                 self.active_alerts[alert_key] = {
                     "text": clock,
                     "lines": fresh_by_clock[clock],
-                    "expires": now + ALERT_DURATION,
+                    "expires": now + ttl,
                     "tag": "SUB",
                 }
 
@@ -960,7 +966,7 @@ class SmartTicker:
                     self.active_alerts[mid] = {
                         "text": headline or "GOAL!",
                         "detail": assist,
-                        "expires": time.time() + ALERT_DURATION,
+                        "expires": time.time() + self._alert_ttl(),
                         "tag": "GOAL",
                     }
                 self.last_scores[mid] = score
@@ -1118,7 +1124,7 @@ class SmartTicker:
         self.active_alerts[mid] = {
             "text": "Test Player 88'",
             "detail": "Someone",
-            "expires": time.time() + ALERT_DURATION,
+            "expires": time.time() + self._alert_ttl(),
         }
         if self.free_float:
             self.sync_free_pills(self.current_matches)
