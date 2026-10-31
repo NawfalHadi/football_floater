@@ -313,27 +313,70 @@ class SmartTicker:
                     pass
         self.active_bubbles = kept
 
+    def _avoid_rects(self):
+        rects = []
+        if self.free_float:
+            for pill in self.match_pills.values():
+                try:
+                    if not pill.winfo_exists():
+                        continue
+                    rects.append(
+                        (
+                            pill.winfo_rootx(),
+                            pill.winfo_rooty(),
+                            max(pill.winfo_width(), PILL_W),
+                            max(pill.winfo_height(), PILL_H),
+                        )
+                    )
+                except tk.TclError:
+                    pass
+            return rects
+        try:
+            rects.append(
+                (self.root.winfo_rootx(), self.root.winfo_rooty(), self.root.winfo_width(), self.root.winfo_height())
+            )
+        except tk.TclError:
+            pass
+        return rects
+
     def sync_bubbles(self):
+        avoid = self._avoid_rects()
+        placed = []
         for _key, anchor, bubble, slot in self.active_bubbles:
             try:
                 if not anchor.winfo_exists():
                     bubble.hide()
                     continue
                 ax, ay = anchor.winfo_rootx(), anchor.winfo_rooty()
+                aw, ah = anchor.winfo_width(), anchor.winfo_height()
                 if not self.free_float:
                     cx, cw = self.clip_frame.winfo_rootx(), self.clip_frame.winfo_width()
                     if ax + anchor.winfo_width() < cx or ax > cx + cw:
                         bubble.hide()
                         continue
                     ay = self.root.winfo_rooty()
-                bubble.place_above(ax, ay, lift=slot * (bubble.h + 4), bounds=self._bubble_bounds(ax, ay))
+                    ah = self.root.winfo_height()
+                else:
+                    aw = max(aw, PILL_W)
+                    ah = max(ah, PILL_H)
+                bx, by = bubble.place_near(
+                    (ax, ay, aw, ah),
+                    lift=slot * (bubble.h + 4),
+                    bounds=self._bubble_bounds(ax, ay),
+                    avoid=avoid + placed,
+                )
+                placed.append((bx, by, bubble.w, bubble.h))
             except tk.TclError:
                 pass
+        try:
+            self.dock.lift()
+        except tk.TclError:
+            pass
 
     def _clear_bubbles(self):
-        for _, _, b in self.active_bubbles:
+        for entry in self.active_bubbles:
             try:
-                b.destroy()
+                entry[2].destroy()
             except tk.TclError:
                 pass
         self.active_bubbles = []

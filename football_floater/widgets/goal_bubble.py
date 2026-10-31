@@ -7,6 +7,68 @@ from ..overlay import setup_overlay
 from ..theme import CHROMA, CLOCK_LIVE, MUTED, PANEL_BG, PL_GREEN, TEXT_COLOR, make_glass
 
 
+def _rects_hit(a, b, pad=6):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return not (ax + aw + pad <= bx or bx + bw + pad <= ax or ay + ah + pad <= by or by + bh + pad <= ay)
+
+
+def choose_bubble_origin(anchor, bubble_w, bubble_h, bounds, avoid, lift=0):
+    """Prefer above the anchor. Slide until the popup misses every other pill."""
+    ax, ay, aw, ah = anchor
+    if bounds:
+        mx, my, mw, mh = bounds
+    else:
+        mx, my, mw, mh = ax - 4000, ay - 4000, 8000, 8000
+    gap = 10
+
+    def clamp(x, y):
+        return (
+            max(mx + 4, min(int(x), mx + mw - bubble_w - 4)),
+            max(my + 4, min(int(y), my + mh - bubble_h - 4)),
+        )
+
+    def open_spot(x, y):
+        x, y = clamp(x, y)
+        rect = (x, y, bubble_w, bubble_h)
+        if any(_rects_hit(rect, other) for other in avoid):
+            return None
+        return x, y
+
+    base_x = ax
+    base_y = ay - gap - bubble_h - lift
+    found = open_spot(base_x, base_y)
+    if found:
+        return found
+    y = base_y
+    for _ in range(24):
+        y -= 14
+        found = open_spot(base_x, y)
+        if found:
+            return found
+    x = base_x
+    for _ in range(24):
+        x -= 14
+        found = open_spot(x, base_y)
+        if found:
+            return found
+    x = base_x
+    for _ in range(24):
+        x += 14
+        found = open_spot(x, base_y)
+        if found:
+            return found
+    for cand in (
+        (ax - gap - bubble_w, ay),
+        (ax + aw + gap, ay),
+        (ax, ay + ah + gap + lift),
+    ):
+        found = open_spot(*cand)
+        if found:
+            return found
+    return clamp(base_x, base_y)
+
+
 class GoalBubble(tk.Toplevel):
     def __init__(self, master, text, tag="GOAL", detail="", lines=None):
         super().__init__(master)
@@ -52,19 +114,21 @@ class GoalBubble(tk.Toplevel):
         self.h = h
         self.geometry(f"{w}x{h}+-2000+-2000")
 
-    def place_above(self, x, y, lift=0, bounds=None):
+    def place_near(self, anchor, lift=0, bounds=None, avoid=()):
         if not self.visible:
             self.deiconify()
             self.visible = True
-        bx = int(x)
-        by = int(y - self.h - 6 - lift)
-        if bounds:
-            mx, my, mw, mh = bounds
-            bx = max(mx + 8, min(bx, mx + mw - self.w - 8))
-            if by < my + 8:
-                by = int(y + 8)
-            by = max(my + 8, min(by, my + mh - self.h - 8))
+            self._placed = None
+        bx, by = choose_bubble_origin(anchor, self.w, self.h, bounds, avoid, lift=lift)
+        if (bx, by) == getattr(self, "_placed", None):
+            return bx, by
+        self._placed = (bx, by)
         self.geometry(f"{self.w}x{self.h}+{bx}+{by}")
+        try:
+            self.lift()
+        except tk.TclError:
+            pass
+        return bx, by
 
     def hide(self):
         if self.visible:
