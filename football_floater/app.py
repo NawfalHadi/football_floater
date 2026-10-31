@@ -599,6 +599,24 @@ class SmartTicker:
             self.set_ticker_visible(True)
             self.render_matches(self.current_matches)
 
+    def rearrange_float_pills(self):
+        """Restack visible float pills from the bottom-right of the chosen display."""
+        if not self.free_float:
+            return
+        self.timeline.close()
+        self._clear_bubbles()
+        visible = [str(m["id"]) for m in self.current_matches if str(m["id"]) not in self.hidden_pills]
+        for mid in visible:
+            self.pill_positions.pop(mid, None)
+            pill = self.match_pills.pop(mid, None)
+            if pill:
+                try:
+                    pill.destroy()
+                except tk.TclError:
+                    pass
+        self.sync_free_pills(self.current_matches)
+        self.save_pill_state()
+
     def _capture_live_pill_positions(self):
         for mid, pill in self.match_pills.items():
             try:

@@ -245,6 +245,14 @@ def _draw_glyph(d, name, box, color):
     elif name == "float":
         d.rounded_rectangle((x0, y0 + 1, x1, cy - 1), radius=2, outline=color, width=1)
         d.rounded_rectangle((x0, cy + 1, x1, y1 - 1), radius=2, outline=color, width=1)
+    elif name == "rearrange":
+        gap = 2
+        hw = (x1 - x0 - gap) / 2
+        hh = (y1 - y0 - gap) / 2
+        d.rounded_rectangle((x0, y0, x0 + hw, y0 + hh), radius=1, outline=color, width=1)
+        d.rounded_rectangle((x0 + hw + gap, y0, x1, y0 + hh), radius=1, outline=color, width=1)
+        d.rounded_rectangle((x0, y0 + hh + gap, x0 + hw, y1), radius=1, outline=color, width=1)
+        d.rounded_rectangle((x0 + hw + gap, y0 + hh + gap, x1, y1), radius=1, outline=color, width=1)
     elif name == "hidden":
         d.ellipse((x0, y0 + 2, x1, y1 - 2), outline=color, width=1)
         d.line((x0, y1, x1, y0), fill=color, width=2)

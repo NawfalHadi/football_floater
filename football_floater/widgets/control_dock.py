@@ -81,6 +81,15 @@ class ControlDock(tk.Toplevel):
             icon="float",
         )
         self.btn_free.pack(side=tk.LEFT, padx=3)
+        self.btn_rearrange = GlassButton(
+            self.body,
+            "Rearrange",
+            self.app.rearrange_float_pills,
+            "default" if self.app.free_float else "muted",
+            min_w=120,
+            icon="rearrange",
+        )
+        self.btn_rearrange.pack(side=tk.LEFT, padx=3)
         self.btn_hidden = GlassButton(
             self.body, "Hidden 0", self.app.show_hidden_menu, "hidden", min_w=112, icon="hidden"
         )
@@ -117,6 +126,16 @@ class ControlDock(tk.Toplevel):
             icon="float",
         )
         self.btn_free.pack(side=tk.LEFT, padx=2)
+        self.btn_rearrange = GlassButton(
+            self.body,
+            "",
+            self.app.rearrange_float_pills,
+            "default" if self.app.free_float else "muted",
+            min_w=28,
+            height=h,
+            icon="rearrange",
+        )
+        self.btn_rearrange.pack(side=tk.LEFT, padx=2)
         self.btn_hidden = GlassButton(
             self.body, "", self.app.show_hidden_menu, "hidden", min_w=28, height=h, icon="hidden"
         )
@@ -165,6 +184,12 @@ class ControlDock(tk.Toplevel):
         kind = "on" if self.app.free_float else "muted"
         label = "" if self.minimized else ("Float: On" if self.app.free_float else "Float: Off")
         self.btn_free.set(label, kind, icon="float")
+        if hasattr(self, "btn_rearrange"):
+            self.btn_rearrange.set(
+                "" if self.minimized else "Rearrange",
+                "default" if self.app.free_float else "muted",
+                icon="rearrange",
+            )
 
     def set_refresh(self, label, kind="default"):
         if hasattr(self, "btn_refresh"):
