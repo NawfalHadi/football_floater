@@ -1,10 +1,22 @@
 """Transient goal / penalty toast bubble."""
+import math
 import tkinter as tk
 from PIL import ImageTk
 
 from ..config import FONT_SMALL, FONT_TINY
 from ..overlay import setup_overlay
-from ..theme import CHROMA, CLOCK_LIVE, MUTED, PANEL_BG, PL_GREEN, TEXT_COLOR, make_glass
+from ..theme import (
+    CHROMA,
+    CLOCK_LIVE,
+    MUTED,
+    PANEL_BG,
+    PL_GREEN,
+    SPEECH_TAIL,
+    TEXT_COLOR,
+    make_glass,
+    make_speech_glass,
+    speech_outer_size,
+)
 
 
 def _rects_hit(a, b, pad=6):
@@ -17,7 +29,6 @@ def stick_above_origin(anchor, bubble_w, bubble_h, bounds, lift=0):
     """Ticker popup: track the scrolling match horizontally. Only pin Y so it stays above the bar."""
     ax, ay, aw, _ah = anchor
     gap = 8
-    # Center on the chip so the toast rides with the match, not the screen edge.
     bx = int(ax + (aw - bubble_w) / 2)
     by = int(ay - gap - bubble_h - lift)
     if bounds:
@@ -27,60 +38,74 @@ def stick_above_origin(anchor, bubble_w, bubble_h, bounds, lift=0):
     return bx, by
 
 
-def choose_bubble_origin(anchor, bubble_w, bubble_h, bounds, avoid, lift=0):
-    """Prefer above the anchor. Slide until the popup misses every other pill."""
+def _tail_for_angle(deg):
+    """Which side of the bubble faces the pill (opposite the placement angle)."""
+    d = deg % 360
+    if 45 <= d < 135:
+        return "top"  # bubble below pill
+    if 135 <= d < 225:
+        return "right"  # bubble left of pill
+    if 225 <= d < 315:
+        return "bottom"  # bubble above pill
+    return "left"  # bubble right of pill
+
+
+def _angle_sweep():
+    """Prefer above the pill, then fan out full 360°."""
+    seen = set()
+    out = []
+    for i in range(0, 360, 15):
+        for deg in ((270 + i) % 360, (270 - i) % 360):
+            if deg in seen:
+                continue
+            seen.add(deg)
+            out.append(deg)
+    return out
+
+
+def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
+    """
+    Pick an empty in-bounds slot around the pill (full circle).
+    Returns (x, y, tail) — top-left of the speech bitmap, and which side the tip uses.
+    """
     ax, ay, aw, ah = anchor
     if bounds:
         mx, my, mw, mh = bounds
     else:
         mx, my, mw, mh = ax - 4000, ay - 4000, 8000, 8000
-    gap = 10
+    gap = 12
+    cx, cy = ax + aw / 2, ay + ah / 2
+    # Keep clear of the owning pill itself.
+    blockers = list(avoid) + [(ax, ay, aw, ah)]
 
-    def clamp(x, y):
-        return (
-            max(mx + 4, min(int(x), mx + mw - bubble_w - 4)),
-            max(my + 4, min(int(y), my + mh - bubble_h - 4)),
-        )
+    def fits(x, y, bw, bh):
+        if x < mx + 4 or y < my + 4 or x + bw > mx + mw - 4 or y + bh > my + mh - 4:
+            return False
+        rect = (x, y, bw, bh)
+        return not any(_rects_hit(rect, other) for other in blockers)
 
-    def open_spot(x, y):
-        x, y = clamp(x, y)
-        rect = (x, y, bubble_w, bubble_h)
-        if any(_rects_hit(rect, other) for other in avoid):
-            return None
-        return x, y
+    # Try rings: tight first, then push out if crowded (lift stacks extra rings).
+    base_reach = max(aw, ah) / 2 + gap + max(body_w, body_h) / 2
+    for ring in (0, 18, 36, 54):
+        dist = base_reach + ring + lift
+        for deg in _angle_sweep():
+            tail = _tail_for_angle(deg)
+            bw, bh = speech_outer_size(body_w, body_h, tail)
+            rad = math.radians(deg)
+            bcx = cx + math.cos(rad) * dist
+            bcy = cy + math.sin(rad) * dist
+            bx = int(bcx - bw / 2)
+            by = int(bcy - bh / 2)
+            if fits(bx, by, bw, bh):
+                return bx, by, tail
 
-    base_x = ax
-    base_y = ay - gap - bubble_h - lift
-    found = open_spot(base_x, base_y)
-    if found:
-        return found
-    y = base_y
-    for _ in range(24):
-        y -= 14
-        found = open_spot(base_x, y)
-        if found:
-            return found
-    x = base_x
-    for _ in range(24):
-        x -= 14
-        found = open_spot(x, base_y)
-        if found:
-            return found
-    x = base_x
-    for _ in range(24):
-        x += 14
-        found = open_spot(x, base_y)
-        if found:
-            return found
-    for cand in (
-        (ax - gap - bubble_w, ay),
-        (ax + aw + gap, ay),
-        (ax, ay + ah + gap + lift),
-    ):
-        found = open_spot(*cand)
-        if found:
-            return found
-    return clamp(base_x, base_y)
+    # Last resort: above, even if tight — still draw a bottom tip.
+    bw, bh = speech_outer_size(body_w, body_h, "bottom")
+    bx = int(cx - bw / 2)
+    by = int(ay - gap - bh)
+    bx = max(mx + 4, min(bx, mx + mw - bw - 4))
+    by = max(my + 4, min(by, my + mh - bh - 4))
+    return bx, by, "bottom"
 
 
 def _fill_toast_body(body, text, tag, detail, lines):
@@ -159,25 +184,34 @@ class TickerToast(tk.Frame):
 
 
 class GoalBubble(tk.Toplevel):
-    """Free-float toast beside a pill (own overlay window)."""
+    """Free-float toast beside a pill — speech tip points at the owner."""
 
     def __init__(self, master, text, tag="GOAL", detail="", lines=None):
         super().__init__(master)
         setup_overlay(self, 0.96)
         self.visible = True
-        bg = tk.Label(self, bg=CHROMA, bd=0)
-        bg.place(x=0, y=0)
-        body = tk.Frame(self, bg=PANEL_BG)
-        _fill_toast_body(body, text, tag, detail or "", lines)
-        body.update_idletasks()
-        w = body.winfo_reqwidth() + 32
-        h = max(32, body.winfo_reqheight() + 16)
-        self._ph = ImageTk.PhotoImage(make_glass(w, h))
-        bg.configure(image=self._ph)
-        body.place(x=16, y=(h - body.winfo_reqheight()) // 2)
-        self.w = w
-        self.h = h
-        self.geometry(f"{w}x{h}+-2000+-2000")
+        self._tail = "bottom"
+        self._bg = tk.Label(self, bg=CHROMA, bd=0)
+        self._bg.place(x=0, y=0)
+        self._body = tk.Frame(self, bg=PANEL_BG)
+        _fill_toast_body(self._body, text, tag, detail or "", lines)
+        self._body.update_idletasks()
+        self.body_w = self._body.winfo_reqwidth() + 32
+        self.body_h = max(32, self._body.winfo_reqheight() + 16)
+        self._body_req_h = self._body.winfo_reqheight()
+        self._ph = None
+        self._apply_tail("bottom")
+        self.geometry(f"{self.w}x{self.h}+-2000+-2000")
+
+    def _apply_tail(self, tail):
+        self._tail = tail
+        self._ph = ImageTk.PhotoImage(make_speech_glass(self.body_w, self.body_h, tail=tail))
+        self.w, self.h = speech_outer_size(self.body_w, self.body_h, tail)
+        self._bg.configure(image=self._ph)
+        self._bg.place(x=0, y=0, width=self.w, height=self.h)
+        ox = SPEECH_TAIL if tail == "left" else 0
+        oy = SPEECH_TAIL if tail == "top" else 0
+        self._body.place(x=ox + 16, y=oy + (self.body_h - self._body_req_h) // 2)
 
     def place_near(self, anchor, lift=0, bounds=None, avoid=(), stick_above=False):
         if not self.visible:
@@ -185,12 +219,17 @@ class GoalBubble(tk.Toplevel):
             self.visible = True
             self._placed = None
         if stick_above:
-            bx, by = stick_above_origin(anchor, self.w, self.h, bounds, lift=lift)
+            bx, by = stick_above_origin(anchor, self.body_w, self.body_h, bounds, lift=lift)
+            tail = "bottom"
         else:
-            bx, by = choose_bubble_origin(anchor, self.w, self.h, bounds, avoid, lift=lift)
-        if (bx, by) == getattr(self, "_placed", None):
+            bx, by, tail = choose_bubble_origin(
+                anchor, self.body_w, self.body_h, bounds, avoid, lift=lift
+            )
+        if (bx, by, tail) == getattr(self, "_placed", None):
             return bx, by
-        self._placed = (bx, by)
+        if tail != self._tail:
+            self._apply_tail(tail)
+        self._placed = (bx, by, tail)
         self.geometry(f"{self.w}x{self.h}+{bx}+{by}")
         try:
             self.lift()

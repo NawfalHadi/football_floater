@@ -115,6 +115,23 @@ def _load_ui_font(size=12):
     return ImageFont.load_default()
 
 
+SPEECH_TAIL = 10
+
+
+def speech_outer_size(body_w, body_h, tail="bottom"):
+    """Full bitmap size including the chat-tail pointing at a pill."""
+    t = SPEECH_TAIL
+    if tail in ("top", "bottom"):
+        return body_w, body_h + t
+    return body_w + t, body_h
+
+
+def _rgba_to_chroma(img):
+    result = Image.new("RGB", img.size, _hex_rgb(CHROMA))
+    result.paste(img.convert("RGB"), mask=img.getchannel("A").point(lambda a: 255 if a > 128 else 0))
+    return result
+
+
 def make_glass(width, height, radius=None, accent=None):
     if radius is None:
         radius = height // 2 if height <= 64 else 16
@@ -142,9 +159,59 @@ def make_glass(width, height, radius=None, accent=None):
         ImageDraw.Draw(img).ellipse(
             (12, height // 2 - 3, 18, height // 2 + 3), fill=_hex_rgb(accent) + (255,)
         )
-    result = Image.new("RGB", size, _hex_rgb(CHROMA))
-    result.paste(img.convert("RGB"), mask=img.getchannel("A").point(lambda a: 255 if a > 128 else 0))
-    return result
+    return _rgba_to_chroma(img)
+
+
+def make_speech_glass(body_w, body_h, tail="bottom", radius=None):
+    """Glass capsule + triangular chat tail. `tail` is the side that points at the pill."""
+    if radius is None:
+        radius = body_h // 2 if body_h <= 64 else 16
+    t = SPEECH_TAIL
+    tail = tail if tail in ("top", "bottom", "left", "right") else "bottom"
+    W, H = speech_outer_size(body_w, body_h, tail)
+    ox = t if tail == "left" else 0
+    oy = t if tail == "top" else 0
+
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    fill = _hex_rgb(PANEL_BG) + (255,)
+    rim = _hex_rgb(PANEL_RIM) + (255,)
+    d.rounded_rectangle(
+        (ox, oy, ox + body_w - 1, oy + body_h - 1),
+        radius=radius,
+        fill=fill,
+        outline=rim,
+        width=1,
+    )
+    # Tip points outward (toward the pill). Base sits on the capsule edge.
+    if tail == "bottom":
+        tip = (ox + body_w // 2, H - 1)
+        base = [(ox + body_w // 2 - 7, oy + body_h - 2), (ox + body_w // 2 + 7, oy + body_h - 2)]
+    elif tail == "top":
+        tip = (ox + body_w // 2, 0)
+        base = [(ox + body_w // 2 - 7, oy + 1), (ox + body_w // 2 + 7, oy + 1)]
+    elif tail == "left":
+        tip = (0, oy + body_h // 2)
+        base = [(ox + 1, oy + body_h // 2 - 7), (ox + 1, oy + body_h // 2 + 7)]
+    else:  # right
+        tip = (W - 1, oy + body_h // 2)
+        base = [(ox + body_w - 2, oy + body_h // 2 - 7), (ox + body_w - 2, oy + body_h // 2 + 7)]
+    d.polygon([base[0], base[1], tip], fill=fill)
+    d.line([base[0], tip], fill=rim, width=1)
+    d.line([base[1], tip], fill=rim, width=1)
+
+    hl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(hl).rounded_rectangle(
+        (ox + 1, oy + 1, ox + body_w - 2, oy + body_h - 2),
+        radius=max(1, radius - 1),
+        outline=(255, 255, 255, GLASS_SHEEN),
+        width=1,
+    )
+    top = Image.new("L", (W, H), 0)
+    ImageDraw.Draw(top).rectangle((0, 0, W, max(4, (oy + body_h) // 3)), fill=255)
+    hl.putalpha(Image.composite(hl.getchannel("A"), Image.new("L", (W, H), 0), top))
+    img = Image.alpha_composite(img, hl)
+    return _rgba_to_chroma(img)
 
 
 def _button_styles():
