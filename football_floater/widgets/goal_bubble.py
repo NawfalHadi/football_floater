@@ -73,7 +73,7 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
         mx, my, mw, mh = bounds
     else:
         mx, my, mw, mh = ax - 4000, ay - 4000, 8000, 8000
-    gap = 12
+    gap = 6
     cx, cy = ax + aw / 2, ay + ah / 2
     # Keep clear of the owning pill itself.
     blockers = list(avoid) + [(ax, ay, aw, ah)]
@@ -84,14 +84,17 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
         rect = (x, y, bw, bh)
         return not any(_rects_hit(rect, other) for other in blockers)
 
-    # Try rings: tight first, then push out if crowded (lift stacks extra rings).
-    base_reach = max(aw, ah) / 2 + gap + max(body_w, body_h) / 2
-    for ring in (0, 18, 36, 54):
-        dist = base_reach + ring + lift
+    # Reach along the ray: pill radius in that direction + gap + bubble radius.
+    # (Using max(aw,ah)/2 made "above" use the pill's WIDTH and fly too far.)
+    for ring in (0, 12, 24, 40):
         for deg in _angle_sweep():
             tail = _tail_for_angle(deg)
             bw, bh = speech_outer_size(body_w, body_h, tail)
             rad = math.radians(deg)
+            c, s = abs(math.cos(rad)), abs(math.sin(rad))
+            pill_r = (aw / 2) * c + (ah / 2) * s
+            bub_r = (bw / 2) * c + (bh / 2) * s
+            dist = pill_r + gap + bub_r + ring + lift
             bcx = cx + math.cos(rad) * dist
             bcy = cy + math.sin(rad) * dist
             bx = int(bcx - bw / 2)

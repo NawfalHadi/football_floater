@@ -171,11 +171,42 @@ def make_speech_glass(body_w, body_h, tail="bottom", radius=None):
     W, H = speech_outer_size(body_w, body_h, tail)
     ox = t if tail == "left" else 0
     oy = t if tail == "top" else 0
+    # How far the triangle base sits inside the capsule — covers chroma seams.
+    inset = 6
 
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     fill = _hex_rgb(PANEL_BG) + (255,)
     rim = _hex_rgb(PANEL_RIM) + (255,)
+    # Draw tip first with base deep inside the body, then paint the capsule on top
+    # so the join is seamless (no magenta gap under chroma key).
+    if tail == "bottom":
+        tip = (ox + body_w // 2, H - 1)
+        base = [
+            (ox + body_w // 2 - 8, oy + body_h - inset),
+            (ox + body_w // 2 + 8, oy + body_h - inset),
+        ]
+    elif tail == "top":
+        tip = (ox + body_w // 2, 0)
+        base = [
+            (ox + body_w // 2 - 8, oy + inset),
+            (ox + body_w // 2 + 8, oy + inset),
+        ]
+    elif tail == "left":
+        tip = (0, oy + body_h // 2)
+        base = [
+            (ox + inset, oy + body_h // 2 - 8),
+            (ox + inset, oy + body_h // 2 + 8),
+        ]
+    else:  # right
+        tip = (W - 1, oy + body_h // 2)
+        base = [
+            (ox + body_w - inset, oy + body_h // 2 - 8),
+            (ox + body_w - inset, oy + body_h // 2 + 8),
+        ]
+    d.polygon([base[0], base[1], tip], fill=fill)
+    d.line([base[0], tip], fill=rim, width=1)
+    d.line([base[1], tip], fill=rim, width=1)
     d.rounded_rectangle(
         (ox, oy, ox + body_w - 1, oy + body_h - 1),
         radius=radius,
@@ -183,22 +214,6 @@ def make_speech_glass(body_w, body_h, tail="bottom", radius=None):
         outline=rim,
         width=1,
     )
-    # Tip points outward (toward the pill). Base sits on the capsule edge.
-    if tail == "bottom":
-        tip = (ox + body_w // 2, H - 1)
-        base = [(ox + body_w // 2 - 7, oy + body_h - 2), (ox + body_w // 2 + 7, oy + body_h - 2)]
-    elif tail == "top":
-        tip = (ox + body_w // 2, 0)
-        base = [(ox + body_w // 2 - 7, oy + 1), (ox + body_w // 2 + 7, oy + 1)]
-    elif tail == "left":
-        tip = (0, oy + body_h // 2)
-        base = [(ox + 1, oy + body_h // 2 - 7), (ox + 1, oy + body_h // 2 + 7)]
-    else:  # right
-        tip = (W - 1, oy + body_h // 2)
-        base = [(ox + body_w - 2, oy + body_h // 2 - 7), (ox + body_w - 2, oy + body_h // 2 + 7)]
-    d.polygon([base[0], base[1], tip], fill=fill)
-    d.line([base[0], tip], fill=rim, width=1)
-    d.line([base[1], tip], fill=rim, width=1)
 
     hl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ImageDraw.Draw(hl).rounded_rectangle(
