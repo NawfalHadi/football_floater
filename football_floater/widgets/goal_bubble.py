@@ -137,11 +137,13 @@ class TickerToast(tk.Frame):
         self.configure(width=w, height=h)
         self.place(x=-4000, y=0, width=w, height=h)
 
-    def update_position(self, x, y, lift=0):
-        """x = left edge in root; y = top of glass bar. Toast sits snug in the band above."""
+    def update_position(self, x, y, lift=0, gap=8):
+        """x = left edge in root; y = top of glass bar. Never draw into the glass."""
         bx = int(x)
-        # Sit just above the glass (2px gap). lift stacks multiple toasts upward.
-        by = max(0, int(y - self.h - 2 - lift))
+        # Bottom of toast at y - gap. Caller must grow the toast band if by would go < 0.
+        by = int(y - self.h - gap - lift)
+        if by < 0:
+            by = 0
         if not self.visible:
             self.visible = True
         self.place(x=bx, y=by, width=self.w, height=self.h)

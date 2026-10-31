@@ -35,6 +35,7 @@ from .config import (
     TICKER_H,
     TICKER_W,
     TOAST_BAND,
+    TOAST_GAP,
 )
 from .espn import scoreboard_url, summary_url
 from .matchday import countdown_text, espn_dates, in_matchday, matchday_window, parse_espn_dt
@@ -185,18 +186,37 @@ class SmartTicker:
 
     # ---------- ticker window ----------
     def _ticker_root_h(self):
-        return TICKER_H + TOAST_BAND
+        return TICKER_H + self.toast_band
+
+    def _apply_ticker_chrome(self):
+        """Place glass under the toast band. Band grows if a tall toast would collide."""
+        band = getattr(self, "toast_band", TOAST_BAND)
+        try:
+            if getattr(self, "ticker_bg", None) is not None:
+                self.ticker_bg.place(x=0, y=band, width=TICKER_W, height=TICKER_H)
+            if getattr(self, "ticker_body", None) is not None:
+                self.ticker_body.place(x=24, y=band + 6, width=TICKER_W - 48, height=TICKER_H - 12)
+            x, y = self.root.winfo_x(), self.root.winfo_y()
+            self.root.geometry(f"{TICKER_W}x{self._ticker_root_h()}+{x}+{y}")
+        except tk.TclError:
+            pass
+
+    def _ensure_toast_band(self, toast_h, lift=0):
+        need = int(toast_h + TOAST_GAP + lift + 2)
+        if need <= self.toast_band:
+            return
+        self.toast_band = need
+        self._apply_ticker_chrome()
 
     def setup_ticker_window(self):
         setup_overlay(self.root)
+        self.toast_band = TOAST_BAND
         self.ticker_bg = tk.Label(self.root, bg=CHROMA, bd=0)
         self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
         self.ticker_bg.configure(image=self._ticker_ph)
-        # Glass sits under a chroma toast band so in-window toasts can place() above it.
-        self.ticker_bg.place(x=0, y=TOAST_BAND, width=TICKER_W, height=TICKER_H)
-
         self.ticker_body = tk.Frame(self.root, bg=PANEL_BG)
-        self.ticker_body.place(x=24, y=TOAST_BAND + 6, width=TICKER_W - 48, height=TICKER_H - 12)
+        # Glass under chroma toast band — toasts place() above without clipping the bar.
+        self._apply_ticker_chrome()
         self.clip_frame = tk.Frame(self.ticker_body, bg=PANEL_BG)
         self.clip_frame.pack(fill=tk.BOTH, expand=True)
         self.ticker_frame = tk.Frame(self.clip_frame, bg=PANEL_BG)
@@ -289,11 +309,7 @@ class SmartTicker:
         self.image_cache.clear()
         self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
         self.ticker_bg.configure(image=self._ticker_ph)
-        try:
-            self.ticker_bg.place(x=0, y=TOAST_BAND, width=TICKER_W, height=TICKER_H)
-            self.ticker_body.place(x=24, y=TOAST_BAND + 6, width=TICKER_W - 48, height=TICKER_H - 12)
-        except tk.TclError:
-            pass
+        self._apply_ticker_chrome()
         for w in (self.ticker_body, self.clip_frame, self.ticker_frame):
             try:
                 w.configure(bg=PANEL_BG)
@@ -464,7 +480,9 @@ class SmartTicker:
                 # Center toast on the match chip (old +40 offset sat over the away crest).
                 bx = local_x + (aw - bubble.w) // 2
                 bx = max(4, min(bx, TICKER_W - bubble.w - 4))
-                bubble.update_position(bx, TOAST_BAND, lift=slot * (bubble.h + 4))
+                lift = slot * (bubble.h + 4)
+                self._ensure_toast_band(bubble.h, lift=lift)
+                bubble.update_position(bx, self.toast_band, lift=lift, gap=TOAST_GAP)
             except tk.TclError:
                 pass
         try:
@@ -508,7 +526,11 @@ class SmartTicker:
                 lines=alert.get("lines") or None,
             )
             # Float → separate overlay window. Running-text → in-root Frame (tracks scroll).
-            bubble = GoalBubble(self.root, **kwargs) if self.free_float else TickerToast(self.root, **kwargs)
+            if self.free_float:
+                bubble = GoalBubble(self.root, **kwargs)
+            else:
+                bubble = TickerToast(self.root, **kwargs)
+                self._ensure_toast_band(bubble.h, lift=slot * (bubble.h + 4))
             self.active_bubbles.append([key, anchor, bubble, slot])
 
     # ---------- free-float ----------
