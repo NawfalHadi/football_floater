@@ -63,6 +63,7 @@ class SmartTicker:
         self.root = root
         self.image_cache = {}
         self.last_scores = {}
+        self.sub_seen = {}
         self.match_details_cache = {}
         self.assist_cache = {}
         self.current_matches = []
@@ -301,9 +302,9 @@ class SmartTicker:
         for mid in [m for m, d in self.active_alerts.items() if now > d["expires"]]:
             del self.active_alerts[mid]
         kept = []
-        for mid, anchor, bubble in self.active_bubbles:
-            if mid in self.active_alerts:
-                kept.append([mid, anchor, bubble])
+        for key, anchor, bubble, _slot in self.active_bubbles:
+            if key in self.active_alerts:
+                kept.append([key, anchor, bubble, _slot])
             else:
                 try:
                     bubble.destroy()
@@ -312,7 +313,7 @@ class SmartTicker:
         self.active_bubbles = kept
 
     def sync_bubbles(self):
-        for mid, anchor, bubble in self.active_bubbles:
+        for _key, anchor, bubble, slot in self.active_bubbles:
             try:
                 if not anchor.winfo_exists():
                     bubble.hide()
@@ -324,7 +325,7 @@ class SmartTicker:
                         bubble.hide()
                         continue
                     ay = self.root.winfo_rooty()
-                bubble.place_above(ax, ay)
+                bubble.place_above(ax, ay, lift=slot * (bubble.h + 4))
             except tk.TclError:
                 pass
 
@@ -336,10 +337,22 @@ class SmartTicker:
                 pass
         self.active_bubbles = []
 
+    def _alert_keys_for(self, mid):
+        now = time.time()
+        keys = []
+        if mid in self.active_alerts and now < self.active_alerts[mid]["expires"]:
+            keys.append(mid)
+        prefix = f"{mid}|sub|"
+        for key, alert in self.active_alerts.items():
+            if str(key).startswith(prefix) and now < alert["expires"]:
+                keys.append(key)
+        return keys
+
     def _add_bubble(self, mid, anchor):
-        alert = self.active_alerts.get(mid)
-        if alert and time.time() < alert["expires"]:
-            self.active_bubbles.append([mid, anchor, GoalBubble(self.root, alert["text"])])
+        for slot, key in enumerate(self._alert_keys_for(mid)):
+            alert = self.active_alerts[key]
+            bubble = GoalBubble(self.root, alert["text"], tag=alert.get("tag", "GOAL"))
+            self.active_bubbles.append([key, anchor, bubble, slot])
 
     # ---------- free-float ----------
     def _rects_overlap(self, x1, y1, w1, h1, x2, y2, w2, h2, pad=PILL_GAP):
@@ -416,7 +429,7 @@ class SmartTicker:
         self._update_hidden_chip()
         kept = []
         for b in self.active_bubbles:
-            if str(b[0]) == mid:
+            if str(b[0]) == mid or str(b[0]).startswith(f"{mid}|"):
                 b[2].destroy()
             else:
                 kept.append(b)
@@ -627,6 +640,57 @@ class SmartTicker:
             out.append((k.get("clock", {}).get("displayValue", ""), assist))
         return out
 
+    def fetch_substitutions(self, m):
+        r = requests.get(summary_url(m["league_id"]), params={"event": m["espn_id"]}, timeout=10)
+        out = []
+        for k in r.json().get("keyEvents", []):
+            typ = k.get("type") or {}
+            if typ.get("type") != "substitution" and typ.get("text") != "Substitution":
+                continue
+            clock = (k.get("clock") or {}).get("displayValue", "")
+            parts = k.get("participants") or []
+
+            def _name(p):
+                a = (p or {}).get("athlete") or {}
+                return a.get("shortName") or a.get("displayName") or ""
+
+            on = _name(parts[0]) if parts else ""
+            off = _name(parts[1]) if len(parts) > 1 else ""
+            if not on or not off:
+                text = k.get("text") or ""
+                if " replaces " in text:
+                    tail = text.split(". ")[-1]
+                    on_txt, _, off_txt = tail.partition(" replaces ")
+                    on = on or on_txt.strip(" .")
+                    off = off or off_txt.strip(" .")
+            if on:
+                out.append({"clock": clock, "on": on, "off": off})
+        return out
+
+    def note_substitutions(self, m):
+        """Toast new live subs. First sight of a match only records what already happened."""
+        if m.get("state") != "in":
+            return
+        subs = self.fetch_substitutions(m)
+        fresh = []
+        for s in subs:
+            key = f"{m['id']}|sub|{s['clock']}|{s['on']}|{s['off']}"
+            fresh.append((key, s))
+        seen = self.sub_seen.get(m["id"])
+        if seen is None:
+            self.sub_seen[m["id"]] = {key for key, _s in fresh}
+            return
+        for key, s in fresh:
+            if key in seen:
+                continue
+            seen.add(key)
+            off = f" · {s['off']} off" if s.get("off") else ""
+            self.active_alerts[key] = {
+                "text": f"{s['on']} on{off}  {s['clock']}",
+                "expires": time.time() + ALERT_DURATION,
+                "tag": "SUB",
+            }
+
     def enrich_assists(self, m, score):
         goals = [e for e in m["history_list"] if e["type"] in ("goal", "penalty")]
         if not goals:
@@ -707,6 +771,10 @@ class SmartTicker:
                         "expires": time.time() + ALERT_DURATION,
                     }
                 self.last_scores[mid] = score
+                try:
+                    self.note_substitutions(m)
+                except Exception:
+                    pass
 
             # stable order: kickoff, then league, then id
             parsed.sort(key=lambda m: (m["kickoff"], m["league_id"], m["id"]))

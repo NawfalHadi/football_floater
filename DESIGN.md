@@ -198,7 +198,8 @@ GOAL  M. Rogers 50'  ·  assist R. Lavia
 ```
 
 - `GOAL` in `PL_GREEN`, rest in `TEXT_COLOR`.
-- Floats 6px above its match (ticker item or pill). Hidden when the item scrolls out of view.
+- Substitutions use the same popup with a `SUB` tag. They are not added to the timeline. The first time a live match is seen, existing subs are remembered and not toasted.
+- Floats 6px above its match (ticker item or pill). A second popup stacks above the first. Hidden when the ticker item scrolls out of view.
 - Lives `ALERT_DURATION` 60s.
 
 ---
