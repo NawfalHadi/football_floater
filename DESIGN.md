@@ -186,7 +186,8 @@ CHE  2 - 0  MUN                64'
 ```
 
 - Header: teams + score (bold), clock right-aligned in clock color.
-- Rows: minute · event icon (goal / penalty / yellow / red) · player; assist row uses assist icon.
+- Rows: minute · event icon · player. An assist is smaller muted text directly under the scorer.
+- Subs at the same minute share one row: icon once, then each swap as `Name on` / `Name off`.
 - Own goals keep `(OG)` suffix. Penalties use penalty icon (no text `(P)`). Assists skipped on pens/OG.
 - Empty state: "No goals or cards yet".
 - Placement: ticker click → prefer **above** ticker, flip below only if clipped. Pill click → beside first (left of right-edge stack). Clamp to **monitor that holds the anchor** (multi-display safe).
@@ -194,11 +195,13 @@ CHE  2 - 0  MUN                64'
 ### Goal popup (`GoalBubble`)
 
 ```
-GOAL  M. Rogers 50'  ·  assist R. Lavia
+GOAL  M. Rogers 50'
+      R. Lavia
 ```
 
-- `GOAL` in `PL_GREEN`, rest in `TEXT_COLOR`.
-- Substitutions use the same popup with a `SUB` tag. They are not added to the timeline. The first time a live match is seen, existing subs are remembered and not toasted.
+- `GOAL` in `PL_GREEN`, scorer in `TEXT_COLOR`, assist in smaller `MUTED` text underneath.
+- The popup is clamped to the monitor that holds the match, so a right-edge pill cannot push it off screen.
+- Substitutions use the same popup with a `SUB` tag, and they also appear in the timeline. The first time a live match is seen, existing subs are remembered and not toasted.
 - Floats 6px above its match (ticker item or pill). A second popup stacks above the first. Hidden when the ticker item scrolls out of view.
 - Lives `ALERT_DURATION` 60s.
 

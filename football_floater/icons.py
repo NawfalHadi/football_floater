@@ -62,6 +62,15 @@ def event_icon(kind: str, size: int = 14) -> Image.Image:
             ],
             fill=_hex_rgb(PL_GREEN),
         )
+    elif kind == "sub":
+        # up arrow (on) and down arrow (off), readable at 16px
+        cx = size // 2
+        d.polygon([(cx, m), (cx - 3, m + 5), (cx + 3, m + 5)], fill=_hex_rgb(TEXT_COLOR))
+        d.polygon(
+            [(cx, size - 1 - m), (cx - 3, size - 6 - m), (cx + 3, size - 6 - m)],
+            fill=_hex_rgb(MUTED),
+        )
+        d.line((cx, m + 4, cx, size - 5 - m), fill=_hex_rgb(TEXT_COLOR), width=1)
     elif kind == "yellow":
         d.rounded_rectangle(
             (m + 1, m, size - 2 - m, size - 1 - m),

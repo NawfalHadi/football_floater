@@ -51,6 +51,70 @@ class TimelinePanel(tk.Toplevel):
         self._icon_refs.append(ph)
         return ph
 
+    @staticmethod
+    def _group_events(events):
+        """Collapse subs that share a minute into one block. Other events stay single rows."""
+        grouped = []
+        bucket = []
+        bucket_time = None
+        for ev in events:
+            if ev.get("type") == "sub" and bucket and ev.get("time") == bucket_time:
+                bucket.append(ev)
+                continue
+            if bucket:
+                grouped.append(("subs", bucket))
+                bucket = []
+            if ev.get("type") == "sub":
+                bucket = [ev]
+                bucket_time = ev.get("time")
+            else:
+                grouped.append(("event", [ev]))
+                bucket_time = None
+        if bucket:
+            grouped.append(("subs", bucket))
+        return grouped
+
+    def _render_event(self, ev):
+        row = tk.Frame(self.body, bg=PANEL_BG)
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text=ev["time"], bg=PANEL_BG, fg=MUTED, font=FONT_TINY, width=6, anchor="w").pack(
+            side=tk.LEFT, anchor="n"
+        )
+        kind = ev.get("type") or "other"
+        if kind in ("goal", "penalty", "yellow", "red"):
+            tk.Label(row, image=self._tk_icon(kind, 16), bg=PANEL_BG, bd=0).pack(
+                side=tk.LEFT, anchor="n", padx=(0, 6)
+            )
+        who = tk.Frame(row, bg=PANEL_BG)
+        who.pack(side=tk.LEFT, anchor="n")
+        tk.Label(who, text=ev["player"], bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI, anchor="w").pack(anchor="w")
+        if ev.get("assist"):
+            tk.Label(who, text=ev["assist"], bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w").pack(anchor="w")
+
+    def _render_sub_group(self, subs):
+        """One minute, one icon, every swap in that minute stacked underneath."""
+        row = tk.Frame(self.body, bg=PANEL_BG)
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text=subs[0].get("time") or "", bg=PANEL_BG, fg=MUTED, font=FONT_TINY, width=6, anchor="w").pack(
+            side=tk.LEFT, anchor="n"
+        )
+        tk.Label(row, image=self._tk_icon("sub", 16), bg=PANEL_BG, bd=0).pack(side=tk.LEFT, anchor="n", padx=(0, 6))
+        who = tk.Frame(row, bg=PANEL_BG)
+        who.pack(side=tk.LEFT, anchor="n", fill=tk.X, expand=True)
+        for i, ev in enumerate(subs):
+            pair = tk.Frame(who, bg=PANEL_BG)
+            pair.pack(anchor="w", pady=(4 if i else 0, 0))
+            on_line = tk.Frame(pair, bg=PANEL_BG)
+            on_line.pack(anchor="w")
+            tk.Label(on_line, text=ev.get("player") or "?", bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI, anchor="w").pack(
+                side=tk.LEFT
+            )
+            tk.Label(on_line, text=" on", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w").pack(side=tk.LEFT)
+            if ev.get("off"):
+                tk.Label(
+                    pair, text=f"{ev['off']} off", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w"
+                ).pack(anchor="w")
+
     @property
     def is_open(self):
         return self.match_id is not None
@@ -93,15 +157,7 @@ class TimelinePanel(tk.Toplevel):
         except tk.TclError:
             pass
 
-    def open(self, match, anchor, prefer_above_ticker=False):
-        # lock scroll immediately so the next animation frame cannot move the match
-        self.app.scroll_locked = True
-        self._cancel()
-        self._prefer_above_ticker = prefer_above_ticker
-        self._icon_refs = []
-        for w in self.body.winfo_children():
-            w.destroy()
-
+    def _fill(self, match):
         head = tk.Frame(self.body, bg=PANEL_BG)
         head.pack(fill=tk.X, pady=(0, 6))
         tk.Label(
@@ -118,31 +174,24 @@ class TimelinePanel(tk.Toplevel):
 
         events = self.app.match_details_cache.get(match["id"], [])
         if not events:
-            tk.Label(self.body, text="No goals or cards yet", bg=PANEL_BG, fg=MUTED, font=FONT_UI).pack(anchor="w")
-        for ev in events:
-            row = tk.Frame(self.body, bg=PANEL_BG)
-            row.pack(fill=tk.X, pady=2)
-            tk.Label(row, text=ev["time"], bg=PANEL_BG, fg=MUTED, font=FONT_TINY, width=6, anchor="w").pack(
-                side=tk.LEFT, anchor="n"
+            tk.Label(self.body, text="No goals, cards, or subs yet", bg=PANEL_BG, fg=MUTED, font=FONT_UI).pack(
+                anchor="w"
             )
-            kind = ev.get("type") or "other"
-            if kind in ("goal", "penalty", "yellow", "red"):
-                tk.Label(row, image=self._tk_icon(kind, 16), bg=PANEL_BG, bd=0).pack(
-                    side=tk.LEFT, anchor="n", padx=(0, 6)
-                )
-            who = tk.Frame(row, bg=PANEL_BG)
-            who.pack(side=tk.LEFT, anchor="n")
-            tk.Label(who, text=ev["player"], bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI, anchor="w").pack(anchor="w")
-            if ev.get("assist"):
-                assist_row = tk.Frame(who, bg=PANEL_BG)
-                assist_row.pack(anchor="w")
-                tk.Label(assist_row, image=self._tk_icon("assist", 13), bg=PANEL_BG, bd=0).pack(
-                    side=tk.LEFT, padx=(0, 4)
-                )
-                tk.Label(
-                    assist_row, text=ev["assist"], bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w"
-                ).pack(side=tk.LEFT)
+        for kind, evs in self._group_events(events):
+            if kind == "subs":
+                self._render_sub_group(evs)
+            else:
+                self._render_event(evs[0])
 
+    def open(self, match, anchor, prefer_above_ticker=False):
+        # lock scroll immediately so the next animation frame cannot move the match
+        self.app.scroll_locked = True
+        self._cancel()
+        self._prefer_above_ticker = prefer_above_ticker
+        self._icon_refs = []
+        for w in self.body.winfo_children():
+            w.destroy()
+        self._fill(match)
         self.body.update_idletasks()
         w = max(220, self.body.winfo_reqwidth() + 32)
         h = self.body.winfo_reqheight() + 24
@@ -162,6 +211,26 @@ class TimelinePanel(tk.Toplevel):
         self._capture_anchor(anchor)
         self._place_smart()
         self._schedule_close(TIMELINE_IDLE_MS)
+
+    def refresh_open(self):
+        """Rebuild rows when a refresh brings new subs, without closing the panel."""
+        if not self.is_open:
+            return
+        match = next((m for m in self.app.current_matches if str(m["id"]) == str(self.match_id)), None)
+        if not match:
+            return
+        self._icon_refs = []
+        for w in self.body.winfo_children():
+            w.destroy()
+        self._fill(match)
+        self.body.update_idletasks()
+        w = max(220, self.body.winfo_reqwidth() + 32)
+        h = self.body.winfo_reqheight() + 24
+        self._size = (w, h)
+        self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
+        self.bg.configure(image=self._ph)
+        self.body.place(x=16, y=12)
+        self._place_smart()
 
     def reattach_ticker_anchor(self, anchor):
         """After ticker rebuild, glue timeline back to the new chip widget."""

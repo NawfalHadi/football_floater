@@ -35,7 +35,7 @@ from .config import (
 )
 from .espn import scoreboard_url, summary_url
 from .matchday import in_matchday, matchday_window, parse_espn_dt
-from .monitors import get_monitor
+from .monitors import get_monitor, list_monitors
 from .overlay import clock_color, setup_overlay
 from .theme import (
     CHROMA,
@@ -64,6 +64,7 @@ class SmartTicker:
         self.image_cache = {}
         self.last_scores = {}
         self.sub_seen = {}
+        self.sub_cache = {}
         self.match_details_cache = {}
         self.assist_cache = {}
         self.current_matches = []
@@ -325,7 +326,7 @@ class SmartTicker:
                         bubble.hide()
                         continue
                     ay = self.root.winfo_rooty()
-                bubble.place_above(ax, ay, lift=slot * (bubble.h + 4))
+                bubble.place_above(ax, ay, lift=slot * (bubble.h + 4), bounds=self._bubble_bounds(ax, ay))
             except tk.TclError:
                 pass
 
@@ -336,6 +337,13 @@ class SmartTicker:
             except tk.TclError:
                 pass
         self.active_bubbles = []
+
+    def _bubble_bounds(self, x, y):
+        for mon in list_monitors(self.root):
+            if mon["x"] <= x < mon["x"] + mon["w"] and mon["y"] <= y < mon["y"] + mon["h"]:
+                return mon["x"], mon["y"], mon["w"], mon["h"]
+        mon = self.selected_monitor()
+        return mon["x"], mon["y"], mon["w"], mon["h"]
 
     def _alert_keys_for(self, mid):
         now = time.time()
@@ -351,7 +359,9 @@ class SmartTicker:
     def _add_bubble(self, mid, anchor):
         for slot, key in enumerate(self._alert_keys_for(mid)):
             alert = self.active_alerts[key]
-            bubble = GoalBubble(self.root, alert["text"], tag=alert.get("tag", "GOAL"))
+            bubble = GoalBubble(
+                self.root, alert["text"], tag=alert.get("tag", "GOAL"), detail=alert.get("detail") or ""
+            )
             self.active_bubbles.append([key, anchor, bubble, slot])
 
     # ---------- free-float ----------
@@ -667,11 +677,44 @@ class SmartTicker:
                 out.append({"clock": clock, "on": on, "off": off})
         return out
 
+    @staticmethod
+    def _clock_sort(clock):
+        raw = (clock or "").replace("'", "")
+        extra = 0
+        if "+" in raw:
+            raw, plus = raw.split("+", 1)
+            extra = int("".join(ch for ch in plus if ch.isdigit()) or 0)
+        base = int("".join(ch for ch in raw if ch.isdigit()) or 0)
+        return base + extra
+
+    def _merge_subs(self, m, subs):
+        rows = [e for e in m["history_list"] if e.get("type") != "sub"]
+        for s in subs:
+            rows.append(
+                {
+                    "time": s["clock"],
+                    "type": "sub",
+                    "player": s["on"],
+                    "off": s.get("off") or "",
+                    "assist": None,
+                }
+            )
+        rows.sort(key=lambda e: (self._clock_sort(e.get("time")), 0 if e.get("type") != "sub" else 1))
+        m["history_list"] = rows
+
     def note_substitutions(self, m):
-        """Toast new live subs. First sight of a match only records what already happened."""
+        """Put every sub on the timeline. Toast only subs that appear after the first live look."""
+        if m.get("state") not in ("in", "post"):
+            return
+        if m.get("state") == "post" and m["id"] in self.sub_cache:
+            subs = self.sub_cache[m["id"]]
+        else:
+            subs = self.fetch_substitutions(m)
+            if m.get("state") == "post":
+                self.sub_cache[m["id"]] = subs
+        self._merge_subs(m, subs)
         if m.get("state") != "in":
             return
-        subs = self.fetch_substitutions(m)
         fresh = []
         for s in subs:
             key = f"{m['id']}|sub|{s['clock']}|{s['on']}|{s['off']}"
@@ -684,9 +727,9 @@ class SmartTicker:
             if key in seen:
                 continue
             seen.add(key)
-            off = f" · {s['off']} off" if s.get("off") else ""
             self.active_alerts[key] = {
-                "text": f"{s['on']} on{off}  {s['clock']}",
+                "text": f"{s['on']} on  {s['clock']}",
+                "detail": f"{s['off']} off" if s.get("off") else "",
                 "expires": time.time() + ALERT_DURATION,
                 "tag": "SUB",
             }
@@ -717,7 +760,7 @@ class SmartTicker:
         if not goals:
             return ""
         g = goals[-1]
-        return f"{g['player']} {g['time']}" + (f"  ·  assist {g['assist']}" if g.get("assist") else "")
+        return f"{g['player']} {g['time']}", (g.get("assist") or "")
 
     def passes_filters(self, m, window):
         if not in_matchday(m["kickoff"], window):
@@ -763,18 +806,21 @@ class SmartTicker:
                 mid = m["id"]
                 score = f"{m['home']['score']}-{m['away']['score']}"
                 self.enrich_assists(m, score)
-                m["last_event"] = self.goal_text(m)
-                self.match_details_cache[mid] = m["history_list"]
+                headline, assist = self.goal_text(m)
+                m["last_event"] = headline
                 if mid in self.last_scores and score != self.last_scores[mid]:
                     self.active_alerts[mid] = {
-                        "text": m["last_event"] or "GOAL!",
+                        "text": headline or "GOAL!",
+                        "detail": assist,
                         "expires": time.time() + ALERT_DURATION,
+                        "tag": "GOAL",
                     }
                 self.last_scores[mid] = score
                 try:
                     self.note_substitutions(m)
                 except Exception:
                     pass
+                self.match_details_cache[mid] = m["history_list"]
 
             # stable order: kickoff, then league, then id
             parsed.sort(key=lambda m: (m["kickoff"], m["league_id"], m["id"]))
@@ -792,6 +838,8 @@ class SmartTicker:
     def render_matches(self, matches):
         if self.free_float:
             self.sync_free_pills(matches)
+            if self.timeline.is_open:
+                self.timeline.refresh_open()
             return
 
         # keep timeline if its match still exists; else close
@@ -866,6 +914,7 @@ class SmartTicker:
         self.update_ticker_width()
         if self.timeline.is_open:
             self.timeline.reattach_ticker_anchor(id_to_item.get(str(self.timeline.match_id)))
+            self.timeline.refresh_open()
 
     def update_ticker_width(self):
         self.ticker_frame.update_idletasks()
@@ -914,7 +963,8 @@ class SmartTicker:
             ]
         mid = self.current_matches[0]["id"]
         self.active_alerts[mid] = {
-            "text": "Test Player 88'  ·  assist Someone",
+            "text": "Test Player 88'",
+            "detail": "Someone",
             "expires": time.time() + ALERT_DURATION,
         }
         if self.free_float:
