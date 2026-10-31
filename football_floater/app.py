@@ -322,6 +322,11 @@ class SmartTicker:
             if self.scroll_x < -self.content_width:
                 self.scroll_x = self.clip_frame.winfo_width()
             self.ticker_frame.place(x=self.scroll_x, y=0, relheight=1.0)
+            # Flush place before bubble sync — else winfo_rootx is stale and toast lags / sticks.
+            try:
+                self.ticker_frame.update_idletasks()
+            except tk.TclError:
+                pass
         self.check_expired_alerts()
         self.sync_bubbles()
         self.tick_countdowns()
@@ -331,6 +336,24 @@ class SmartTicker:
     def _alert_ttl(self):
         """Ticker toasts stay longer; float toasts clear faster so they do not cover the pitch."""
         return FLOAT_ALERT_DURATION if self.free_float else ALERT_DURATION
+
+    def _refresh_alert_ttls_for_mode(self):
+        """
+        Open alerts keep living across Float ↔ running-text, but TTL matches the new surface.
+        Float → ticker: give the full ticker window so the toast can ride the chip.
+        Ticker → float: cap so a 60s ticker toast does not sit on the pitch.
+        """
+        if not self.active_alerts:
+            return
+        now = time.time()
+        ttl = self._alert_ttl()
+        for alert in self.active_alerts.values():
+            if now >= alert["expires"]:
+                continue
+            if self.free_float:
+                alert["expires"] = min(alert["expires"], now + ttl)
+            else:
+                alert["expires"] = now + ttl
 
     def check_expired_alerts(self):
         now = time.time()
@@ -589,14 +612,17 @@ class SmartTicker:
         self.timeline.close()
         self._clear_bubbles()
         self.free_float = not self.free_float
+        self._refresh_alert_ttls_for_mode()
         self.dock.set_free_button()
         if self.free_float:
             self.set_ticker_visible(False)
+            # Recreate toasts on pills for any alert still open from running-text.
             self.sync_free_pills(self.current_matches)
         else:
             self._capture_live_pill_positions()
             self.destroy_all_pills()
             self.set_ticker_visible(True)
+            # Recreate toasts on ticker chips for any alert still open from float.
             self.render_matches(self.current_matches)
 
     def rearrange_float_pills(self):

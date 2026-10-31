@@ -14,14 +14,14 @@ def _rects_hit(a, b, pad=6):
 
 
 def stick_above_origin(anchor, bubble_w, bubble_h, bounds, lift=0):
-    """Ticker popup: stay above the scrolling match. Do not dodge sideways or drop below the bar."""
-    ax, ay, _aw, _ah = anchor
+    """Ticker popup: track the scrolling match horizontally. Only pin Y so it stays above the bar."""
+    ax, ay, aw, _ah = anchor
     gap = 8
-    bx = int(ax)
+    # Center on the chip so the toast rides with the match, not the screen edge.
+    bx = int(ax + (aw - bubble_w) / 2)
     by = int(ay - gap - bubble_h - lift)
     if bounds:
-        mx, my, mw, _mh = bounds
-        bx = max(mx + 4, min(bx, mx + mw - bubble_w - 4))
+        _mx, my, _mw, _mh = bounds
         if by < my + 4 and my + 4 + bubble_h + gap <= ay:
             by = my + 4
     return bx, by
