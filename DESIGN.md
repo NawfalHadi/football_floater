@@ -93,7 +93,7 @@ Rules:
 | Goal popup | auto × 32 | full pill |
 | Timeline panel | auto (min 220 wide) | **16px** (tall panels must never use h/2 — it turns into an oval) |
 | Button | auto (min_w optional) × 28 | full pill |
-| Team logo | `ICON_SIZE` 24 (ticker), `PILL_ICON` 26 (pill) | circle on light `ICON_BADGE` disc (navy crests stay readable) |
+| Team logo | `ICON_SIZE` 24 (ticker), `PILL_ICON` 26 (pill) | circle, panel fill behind the crest |
 
 Spacing:
 - Gap between control bar and ticker: `ROW_GAP` 8

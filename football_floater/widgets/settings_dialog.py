@@ -26,8 +26,12 @@ class StartupSettingsDialog(tk.Toplevel):
         self.title("Live Scores — Settings" if not startup else "Live Scores — What to show?")
         self.configure(bg=PANEL_BG)
         self.resizable(False, False)
-        self.transient(app.root)
-        self.grab_set()
+        # Borderless ticker cannot parent a transient dialog on Windows — the
+        # window is created and then never mapped. Stay topmost instead.
+        try:
+            self.wm_attributes("-topmost", True)
+        except tk.TclError:
+            pass
 
         start, end = matchday_window()
         tip = (
@@ -182,12 +186,42 @@ class StartupSettingsDialog(tk.Toplevel):
             ).pack(side=tk.RIGHT, padx=(0, 8))
 
         self.protocol("WM_DELETE_WINDOW", self._save if startup else self.destroy)
+        self._place_near_dock()
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+    def _place_near_dock(self):
+        """Center on the screen that actually holds the dock, not a hidden monitor."""
         self.update_idletasks()
-        mon = self.monitors[saved_mon]
-        dw, dh = self.winfo_reqwidth(), self.winfo_reqheight()
-        self.geometry(
-            f"+{mon['x'] + (mon['w'] - dw) // 2}+{mon['y'] + (mon['h'] - dh) // 2}"
-        )
+        dw, dh = max(self.winfo_reqwidth(), 280), max(self.winfo_reqheight(), 200)
+        try:
+            dock = self.app.dock
+            ax = dock.winfo_rootx() + max(dock.winfo_width(), 1) // 2
+            ay = dock.winfo_rooty()
+        except (tk.TclError, AttributeError):
+            mon = self.monitors[0]
+            ax = mon["x"] + mon["w"] // 2
+            ay = mon["y"] + 120
+        mon = self.monitors[0]
+        for candidate in self.monitors:
+            if candidate["x"] <= ax < candidate["x"] + candidate["w"] and candidate["y"] <= ay < candidate["y"] + candidate["h"]:
+                mon = candidate
+                break
+        x = int(ax - dw / 2)
+        y = int(ay - dh - 16)
+        x = max(mon["x"] + 8, min(x, mon["x"] + mon["w"] - dw - 8))
+        y = max(mon["y"] + 8, min(y, mon["y"] + mon["h"] - dh - 8))
+        self.geometry(f"{dw}x{dh}+{x}+{y}")
+
+    def destroy(self):
+        if getattr(self.app, "_settings_dialog", None) is self:
+            self.app._settings_dialog = None
+        super().destroy()
 
     def _league_logo(self, url, size=22):
         if not url:

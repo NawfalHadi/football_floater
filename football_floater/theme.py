@@ -230,44 +230,73 @@ def apply_theme(name):
     return name
 
 
-def make_button(label, kind="default", hover=False, min_w=0, height=28, pad_x=14):
+def _draw_glyph(d, name, box, color):
+    """Tiny vector icon. Unicode glyphs are missing in Segoe/DejaVu and draw as empty boxes."""
+    x0, y0, x1, y1 = box
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    name = name or ""
+    if name == "refresh":
+        d.arc((x0, y0, x1, y1), start=40, end=300, fill=color, width=2)
+        d.polygon([(x1 - 2, cy - 1), (x1 - 6, cy + 3), (x1 + 1, cy + 3)], fill=color)
+    elif name == "ball":
+        d.ellipse((x0, y0, x1, y1), outline=color, width=2)
+        d.line((cx, y0 + 1, cx, y1 - 1), fill=color, width=1)
+        d.line((x0 + 1, cy, x1 - 1, cy), fill=color, width=1)
+    elif name == "float":
+        d.rounded_rectangle((x0, y0 + 1, x1, cy - 1), radius=2, outline=color, width=1)
+        d.rounded_rectangle((x0, cy + 1, x1, y1 - 1), radius=2, outline=color, width=1)
+    elif name == "hidden":
+        d.ellipse((x0, y0 + 2, x1, y1 - 2), outline=color, width=1)
+        d.line((x0, y1, x1, y0), fill=color, width=2)
+    elif name == "gear":
+        d.ellipse((x0 + 2, y0 + 2, x1 - 2, y1 - 2), outline=color, width=2)
+        d.ellipse((cx - 1, cy - 1, cx + 2, cy + 2), fill=color)
+        d.line((cx, y0, cx, y0 + 3), fill=color, width=2)
+        d.line((cx, y1 - 3, cx, y1), fill=color, width=2)
+        d.line((x0, cy, x0 + 3, cy), fill=color, width=2)
+        d.line((x1 - 3, cy, x1, cy), fill=color, width=2)
+    elif name == "mini":
+        d.line((x0 + 1, cy, x1 - 1, cy), fill=color, width=2)
+    elif name == "expand":
+        d.rounded_rectangle((x0 + 1, y0 + 1, x1 - 1, y1 - 1), radius=2, outline=color, width=2)
+    elif name == "quit":
+        d.line((x0 + 1, y0 + 1, x1 - 1, y1 - 1), fill=color, width=2)
+        d.line((x0 + 1, y1 - 1, x1 - 1, y0 + 1), fill=color, width=2)
+
+
+def make_button(label, kind="default", hover=False, min_w=0, height=28, pad_x=14, icon=None):
     fill, rim, text = BUTTON_STYLES[kind]
     fill_rgb = _mix(fill, "#FFFFFF", 0.10) if hover else _hex_rgb(fill)
     font = _load_ui_font(12 if height >= 28 else 11)
-    bbox = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((0, 0), label, font=font)
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    bbox = draw.textbbox((0, 0), label or "", font=font) if label else (0, 0, 0, 0)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    width = max(min_w, tw + pad_x * 2)
+    glyph = max(10, height - 14) if icon else 0
+    gap = 6 if icon and label else 0
+    width = max(min_w, tw + glyph + gap + pad_x * 2)
     img = Image.new("RGB", (width, height), _hex_rgb(PANEL_BG))
     d = ImageDraw.Draw(img)
     d.rounded_rectangle(
         (0, 0, width - 1, height - 1), radius=height // 2, fill=fill_rgb, outline=_hex_rgb(rim), width=1
     )
-    d.text(
-        ((width - tw) / 2 - bbox[0], (height - th) / 2 - bbox[1]),
-        label,
-        fill=_hex_rgb(text),
-        font=font,
-    )
+    content = tw + glyph + gap
+    left = (width - content) / 2
+    if icon:
+        gy = (height - glyph) / 2
+        _draw_glyph(d, icon, (left, gy, left + glyph, gy + glyph), _hex_rgb(text))
+        left += glyph + gap
+    if label:
+        d.text((left - bbox[0], (height - th) / 2 - bbox[1]), label, fill=_hex_rgb(text), font=font)
     return img
 
 
 def make_circle_icon(im, size=ICON_SIZE):
-    """Crest on a light circular badge — dark kits stay visible on PANEL_BG."""
-    pad = max(1, size // 10)
-    inner = max(8, size - pad * 2)
-    im = im.convert("RGBA").resize((inner, inner), Image.Resampling.LANCZOS)
-
-    badge = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    ImageDraw.Draw(badge).ellipse(
-        (0, 0, size - 1, size - 1),
-        fill=_hex_rgb(ICON_BADGE) + (255,),
-        outline=_hex_rgb(ICON_BADGE_RIM) + (255,),
-        width=1,
-    )
-
-    mask = Image.new("L", (inner, inner), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, inner - 1, inner - 1), fill=255)
-    logo = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    logo.paste(im, (pad, pad), mask)
-    return Image.alpha_composite(badge, logo).convert("RGB")
+    """Circular crest on the panel color. No light disc."""
+    im = im.convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    out.paste(im, (0, 0), mask)
+    bg = Image.new("RGBA", (size, size), _hex_rgb(PANEL_BG) + (255,))
+    return Image.alpha_composite(bg, out).convert("RGB")
 

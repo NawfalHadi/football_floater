@@ -456,7 +456,16 @@ class SmartTicker:
             menu.grab_release()
 
     def show_settings_dialog(self):
-        StartupSettingsDialog(self, startup=False)
+        existing = getattr(self, "_settings_dialog", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.deiconify()
+                existing.lift()
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
+        self._settings_dialog = StartupSettingsDialog(self, startup=False)
 
     def toggle_free_float(self):
         self.timeline.close()
@@ -797,7 +806,7 @@ class SmartTicker:
     def get_team_icon(self, tla, url, size=ICON_SIZE):
         if not url:
             return None
-        key = f"{tla}:{size}:badge"
+        key = f"{tla}:{size}"
         if key in self.image_cache:
             return self.image_cache[key]
         try:
