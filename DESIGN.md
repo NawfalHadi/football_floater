@@ -131,7 +131,7 @@ Shown **every app open** unless **Don't ask next time** is checked.
 
 - **Leagues:** Premier League (`eng.1`), Bundesliga (`ger.1`) — multi-select with league logos
 - **Theme:** `default` (current glass), `experimental` (PL × Bundesliga scorebug), or `glass` (macOS frosted material — cool gray, light hairline, system cyan clock). Saved in `settings.json`. Panels stay opaque; chroma key cannot blur the pitch.
-- **Match types:** Past / Live / Future (matchday window)
+- **Match types:** Past / Live / Future (matchday window). With Live on and Past off, a match that goes full-time stays until the app restarts. It is not kept on the next launch.
 - **Display:** detected monitors (Windows API / xrandr / Gdk / Tk fallback). Default radio = OS **primary** until user picks. Free-float pills also spawn on that screen’s bottom-right.
 - Opt-out checkbox; reopen anytime via **Settings**
 - Match chips show league short (`PL` / `BL`) under the clock
@@ -186,8 +186,8 @@ CHE  2 - 0  MUN                64'
 ```
 
 - Header: teams + score (bold), clock right-aligned in clock color.
-- Rows: minute · event icon · player. An assist is smaller muted text directly under the scorer.
-- Subs at the same minute share one row: icon once, then each swap as `Name on` / `Name off`.
+- Rows: minute in the center. Home events sit on the left, away events on the right. An assist is smaller muted text under the scorer, on that team's side.
+- Subs at the same minute share one row: home swaps on the left, away swaps on the right.
 - Own goals keep `(OG)` suffix. Penalties use penalty icon (no text `(P)`). Assists skipped on pens/OG.
 - Empty state: "No goals or cards yet".
 - Placement: ticker click → prefer **above** ticker, flip below only if clipped. Pill click → beside first (left of right-edge stack). Clamp to **monitor that holds the anchor** (multi-display safe).

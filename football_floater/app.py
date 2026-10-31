@@ -67,6 +67,7 @@ class SmartTicker:
         self.sub_cache = {}
         self.match_details_cache = {}
         self.assist_cache = {}
+        self.seen_live = set()
         self.current_matches = []
 
         self.active_alerts = {}
@@ -315,32 +316,24 @@ class SmartTicker:
 
     def _avoid_rects(self):
         rects = []
-        if self.free_float:
-            for pill in self.match_pills.values():
-                try:
-                    if not pill.winfo_exists():
-                        continue
-                    rects.append(
-                        (
-                            pill.winfo_rootx(),
-                            pill.winfo_rooty(),
-                            max(pill.winfo_width(), PILL_W),
-                            max(pill.winfo_height(), PILL_H),
-                        )
+        for pill in self.match_pills.values():
+            try:
+                if not pill.winfo_exists():
+                    continue
+                rects.append(
+                    (
+                        pill.winfo_rootx(),
+                        pill.winfo_rooty(),
+                        max(pill.winfo_width(), PILL_W),
+                        max(pill.winfo_height(), PILL_H),
                     )
-                except tk.TclError:
-                    pass
-            return rects
-        try:
-            rects.append(
-                (self.root.winfo_rootx(), self.root.winfo_rooty(), self.root.winfo_width(), self.root.winfo_height())
-            )
-        except tk.TclError:
-            pass
+                )
+            except tk.TclError:
+                pass
         return rects
 
     def sync_bubbles(self):
-        avoid = self._avoid_rects()
+        avoid = self._avoid_rects() if self.free_float else []
         placed = []
         for _key, anchor, bubble, slot in self.active_bubbles:
             try:
@@ -351,7 +344,7 @@ class SmartTicker:
                 aw, ah = anchor.winfo_width(), anchor.winfo_height()
                 if not self.free_float:
                     cx, cw = self.clip_frame.winfo_rootx(), self.clip_frame.winfo_width()
-                    if ax + anchor.winfo_width() < cx or ax > cx + cw:
+                    if ax + aw < cx or ax > cx + cw:
                         bubble.hide()
                         continue
                     ay = self.root.winfo_rooty()
@@ -364,6 +357,7 @@ class SmartTicker:
                     lift=slot * (bubble.h + 4),
                     bounds=self._bubble_bounds(ax, ay),
                     avoid=avoid + placed,
+                    stick_above=not self.free_float,
                 )
                 placed.append((bx, by, bubble.w, bubble.h))
             except tk.TclError:
@@ -642,11 +636,18 @@ class SmartTicker:
             for d in event["competitions"][0].get("details", []):
                 clock = d.get("clock", {}).get("displayValue", "")
                 type_txt = d.get("type", {}).get("text", "") or ""
-                evt = {"time": clock, "player": self.get_player_name_from_detail(d), "assist": None, "type": "other"}
+                own_goal = bool(d.get("ownGoal") or "Own Goal" in type_txt)
+                evt = {
+                    "time": clock,
+                    "player": self.get_player_name_from_detail(d),
+                    "assist": None,
+                    "type": "other",
+                    "side": self._team_side(d.get("team"), home, away, own_goal=own_goal),
+                }
                 if self.is_scoring_detail(d, type_txt):
                     is_pen = bool(d.get("penaltyKick") or ("Penalty" in type_txt and "Scored" in type_txt))
                     evt["type"] = "penalty" if is_pen else "goal"
-                    evt["own_goal"] = bool(d.get("ownGoal") or "Own Goal" in type_txt)
+                    evt["own_goal"] = own_goal
                     if evt["own_goal"]:
                         evt["player"] += " (OG)"
                     events_list.append(evt)
@@ -665,11 +666,13 @@ class SmartTicker:
                 "state": state,
                 "kickoff": kickoff,
                 "home": {
+                    "id": str(home["team"].get("id") or ""),
                     "tla": home["team"]["abbreviation"],
                     "logo": home["team"]["logo"],
                     "score": int(home.get("score", 0)),
                 },
                 "away": {
+                    "id": str(away["team"].get("id") or ""),
                     "tla": away["team"]["abbreviation"],
                     "logo": away["team"]["logo"],
                     "score": int(away.get("score", 0)),
@@ -721,8 +724,35 @@ class SmartTicker:
                     on = on or on_txt.strip(" .")
                     off = off or off_txt.strip(" .")
             if on:
-                out.append({"clock": clock, "on": on, "off": off})
+                out.append({"clock": clock, "on": on, "off": off, "side": self._team_side(k.get("team"), m)})
         return out
+
+    @staticmethod
+    def _team_side(team, home, away=None, own_goal=False):
+        """home or away. Own goals flip: ESPN tags the team credited with the goal, not the player."""
+        team = team or {}
+        if away is None and isinstance(home, dict) and "home" in home and "away" in home:
+            away = home["away"]
+            home = home["home"]
+        tid = str(team.get("id") or "")
+        abbr = (team.get("abbreviation") or "").upper()
+
+        def is_side(info):
+            if not isinstance(info, dict):
+                return False
+            info_id = str(info.get("id") or (info.get("team") or {}).get("id") or "")
+            info_abbr = (info.get("tla") or info.get("abbreviation") or (info.get("team") or {}).get("abbreviation") or "").upper()
+            return (tid and info_id and tid == info_id) or (abbr and info_abbr and abbr == info_abbr)
+
+        if is_side(home):
+            side = "home"
+        elif is_side(away):
+            side = "away"
+        else:
+            return None
+        if own_goal:
+            return "away" if side == "home" else "home"
+        return side
 
     @staticmethod
     def _clock_sort(clock):
@@ -744,6 +774,7 @@ class SmartTicker:
                     "player": s["on"],
                     "off": s.get("off") or "",
                     "assist": None,
+                    "side": s.get("side"),
                 }
             )
         rows.sort(key=lambda e: (self._clock_sort(e.get("time")), 0 if e.get("type") != "sub" else 1))
@@ -828,8 +859,14 @@ class SmartTicker:
         if not in_matchday(m["kickoff"], window):
             return False
         state = m["state"]
+        mid = str(m["id"])
+        if state == "in" and self.settings.get("show_live", True):
+            self.seen_live.add(mid)
         if state == "post":
-            return bool(self.settings.get("show_past", True))
+            if self.settings.get("show_past", True):
+                return True
+            # Live-only: keep a match that finished during this run. Gone after restart.
+            return bool(self.settings.get("show_live", True) and mid in self.seen_live)
         if state == "in":
             return bool(self.settings.get("show_live", True))
         if state == "pre":

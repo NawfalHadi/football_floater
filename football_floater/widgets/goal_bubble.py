@@ -13,6 +13,20 @@ def _rects_hit(a, b, pad=6):
     return not (ax + aw + pad <= bx or bx + bw + pad <= ax or ay + ah + pad <= by or by + bh + pad <= ay)
 
 
+def stick_above_origin(anchor, bubble_w, bubble_h, bounds, lift=0):
+    """Ticker popup: stay above the scrolling match. Do not dodge sideways or drop below the bar."""
+    ax, ay, _aw, _ah = anchor
+    gap = 8
+    bx = int(ax)
+    by = int(ay - gap - bubble_h - lift)
+    if bounds:
+        mx, my, mw, _mh = bounds
+        bx = max(mx + 4, min(bx, mx + mw - bubble_w - 4))
+        if by < my + 4 and my + 4 + bubble_h + gap <= ay:
+            by = my + 4
+    return bx, by
+
+
 def choose_bubble_origin(anchor, bubble_w, bubble_h, bounds, avoid, lift=0):
     """Prefer above the anchor. Slide until the popup misses every other pill."""
     ax, ay, aw, ah = anchor
@@ -114,12 +128,15 @@ class GoalBubble(tk.Toplevel):
         self.h = h
         self.geometry(f"{w}x{h}+-2000+-2000")
 
-    def place_near(self, anchor, lift=0, bounds=None, avoid=()):
+    def place_near(self, anchor, lift=0, bounds=None, avoid=(), stick_above=False):
         if not self.visible:
             self.deiconify()
             self.visible = True
             self._placed = None
-        bx, by = choose_bubble_origin(anchor, self.w, self.h, bounds, avoid, lift=lift)
+        if stick_above:
+            bx, by = stick_above_origin(anchor, self.w, self.h, bounds, lift=lift)
+        else:
+            bx, by = choose_bubble_origin(anchor, self.w, self.h, bounds, avoid, lift=lift)
         if (bx, by) == getattr(self, "_placed", None):
             return bx, by
         self._placed = (bx, by)

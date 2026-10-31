@@ -74,46 +74,83 @@ class TimelinePanel(tk.Toplevel):
             grouped.append(("subs", bucket))
         return grouped
 
-    def _render_event(self, ev):
+    def _columns(self, minute):
         row = tk.Frame(self.body, bg=PANEL_BG)
         row.pack(fill=tk.X, pady=2)
-        tk.Label(row, text=ev["time"], bg=PANEL_BG, fg=MUTED, font=FONT_TINY, width=6, anchor="w").pack(
-            side=tk.LEFT, anchor="n"
+        row.columnconfigure(0, weight=1, minsize=120, uniform="side")
+        row.columnconfigure(1, weight=0)
+        row.columnconfigure(2, weight=1, minsize=120, uniform="side")
+        left = tk.Frame(row, bg=PANEL_BG)
+        mid = tk.Frame(row, bg=PANEL_BG)
+        right = tk.Frame(row, bg=PANEL_BG)
+        left.grid(row=0, column=0, sticky="nsew")
+        mid.grid(row=0, column=1, sticky="n", padx=4)
+        right.grid(row=0, column=2, sticky="nsew")
+        tk.Label(mid, text=minute or "", bg=PANEL_BG, fg=MUTED, font=FONT_TINY, width=5).pack()
+        return left, right
+
+    def _event_names(self, parent, ev, side):
+        anchor = "e" if side == "home" else "w"
+        tk.Label(parent, text=ev.get("player") or "?", bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI, anchor=anchor).pack(
+            anchor=anchor
         )
-        kind = ev.get("type") or "other"
-        if kind in ("goal", "penalty", "yellow", "red"):
-            tk.Label(row, image=self._tk_icon(kind, 16), bg=PANEL_BG, bd=0).pack(
-                side=tk.LEFT, anchor="n", padx=(0, 6)
-            )
-        who = tk.Frame(row, bg=PANEL_BG)
-        who.pack(side=tk.LEFT, anchor="n")
-        tk.Label(who, text=ev["player"], bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI, anchor="w").pack(anchor="w")
         if ev.get("assist"):
-            tk.Label(who, text=ev["assist"], bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w").pack(anchor="w")
+            tk.Label(parent, text=ev["assist"], bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor=anchor).pack(anchor=anchor)
+
+    def _render_event(self, ev):
+        side = "away" if ev.get("side") == "away" else "home"
+        left, right = self._columns(ev.get("time"))
+        parent = right if side == "away" else left
+        block = tk.Frame(parent, bg=PANEL_BG)
+        block.pack(anchor="e" if side == "home" else "w")
+        names = tk.Frame(block, bg=PANEL_BG)
+        kind = ev.get("type") or "other"
+        icon = None
+        if kind in ("goal", "penalty", "yellow", "red"):
+            icon = tk.Label(block, image=self._tk_icon(kind, 16), bg=PANEL_BG, bd=0)
+        self._event_names(names, ev, side)
+        if side == "home":
+            names.pack(side=tk.LEFT, anchor="n")
+            if icon:
+                icon.pack(side=tk.LEFT, anchor="n", padx=(6, 0))
+        else:
+            if icon:
+                icon.pack(side=tk.LEFT, anchor="n", padx=(0, 6))
+            names.pack(side=tk.LEFT, anchor="n")
+
+    def _fill_sub_side(self, parent, subs, side):
+        block = tk.Frame(parent, bg=PANEL_BG)
+        block.pack(anchor="e" if side == "home" else "w")
+        names = tk.Frame(block, bg=PANEL_BG)
+        icon = tk.Label(block, image=self._tk_icon("sub", 16), bg=PANEL_BG, bd=0)
+        anchor = "e" if side == "home" else "w"
+        for i, ev in enumerate(subs):
+            pair = tk.Frame(names, bg=PANEL_BG)
+            pair.pack(anchor=anchor, pady=(4 if i else 0, 0))
+            on_line = tk.Frame(pair, bg=PANEL_BG)
+            on_line.pack(anchor=anchor)
+            tk.Label(on_line, text=ev.get("player") or "?", bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI).pack(side=tk.LEFT)
+            tk.Label(on_line, text=" on", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL).pack(side=tk.LEFT)
+            if ev.get("off"):
+                tk.Label(pair, text=f"{ev['off']} off", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor=anchor).pack(
+                    anchor=anchor
+                )
+        if side == "home":
+            names.pack(side=tk.LEFT, anchor="n")
+            icon.pack(side=tk.LEFT, anchor="n", padx=(6, 0))
+        else:
+            icon.pack(side=tk.LEFT, anchor="n", padx=(0, 6))
+            names.pack(side=tk.LEFT, anchor="n")
 
     def _render_sub_group(self, subs):
-        """One minute, one icon, every swap in that minute stacked underneath."""
-        row = tk.Frame(self.body, bg=PANEL_BG)
-        row.pack(fill=tk.X, pady=2)
-        tk.Label(row, text=subs[0].get("time") or "", bg=PANEL_BG, fg=MUTED, font=FONT_TINY, width=6, anchor="w").pack(
-            side=tk.LEFT, anchor="n"
-        )
-        tk.Label(row, image=self._tk_icon("sub", 16), bg=PANEL_BG, bd=0).pack(side=tk.LEFT, anchor="n", padx=(0, 6))
-        who = tk.Frame(row, bg=PANEL_BG)
-        who.pack(side=tk.LEFT, anchor="n", fill=tk.X, expand=True)
-        for i, ev in enumerate(subs):
-            pair = tk.Frame(who, bg=PANEL_BG)
-            pair.pack(anchor="w", pady=(4 if i else 0, 0))
-            on_line = tk.Frame(pair, bg=PANEL_BG)
-            on_line.pack(anchor="w")
-            tk.Label(on_line, text=ev.get("player") or "?", bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI, anchor="w").pack(
-                side=tk.LEFT
-            )
-            tk.Label(on_line, text=" on", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w").pack(side=tk.LEFT)
-            if ev.get("off"):
-                tk.Label(
-                    pair, text=f"{ev['off']} off", bg=PANEL_BG, fg=MUTED, font=FONT_SMALL, anchor="w"
-                ).pack(anchor="w")
+        """One minute in the middle. Home swaps on the left, away swaps on the right."""
+        left, right = self._columns(subs[0].get("time"))
+        home = [ev for ev in subs if ev.get("side") != "away"]
+        away = [ev for ev in subs if ev.get("side") == "away"]
+        if home:
+            self._fill_sub_side(left, home, "home")
+        if away:
+            self._fill_sub_side(right, away, "away")
 
     @property
     def is_open(self):
@@ -160,15 +197,29 @@ class TimelinePanel(tk.Toplevel):
     def _fill(self, match):
         head = tk.Frame(self.body, bg=PANEL_BG)
         head.pack(fill=tk.X, pady=(0, 6))
+        head.columnconfigure(0, weight=1, uniform="head")
+        head.columnconfigure(1, weight=0)
+        head.columnconfigure(2, weight=1, uniform="head")
         tk.Label(
             head,
-            text=f"{match.get('league_short', '')}  {match['home']['tla']}  {match['home']['score']} - {match['away']['score']}  {match['away']['tla']}",
+            text=f"{match.get('league_short', '')}  {match['home']['tla']}".strip(),
             bg=PANEL_BG,
             fg=TEXT_COLOR,
             font=FONT_UI_BOLD,
-        ).pack(side=tk.LEFT)
-        tk.Label(head, text=match["time"], bg=PANEL_BG, fg=clock_color(match["time"]), font=FONT_TINY).pack(
-            side=tk.RIGHT, padx=(12, 0)
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            head,
+            text=f"{match['home']['score']} - {match['away']['score']}",
+            bg=PANEL_BG,
+            fg=TEXT_COLOR,
+            font=FONT_UI_BOLD,
+        ).grid(row=0, column=1, padx=8)
+        tk.Label(head, text=match["away"]["tla"], bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_UI_BOLD, anchor="e").grid(
+            row=0, column=2, sticky="e"
+        )
+        tk.Label(head, text=match["time"], bg=PANEL_BG, fg=clock_color(match["time"]), font=FONT_TINY).grid(
+            row=1, column=1, pady=(2, 0)
         )
         tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(0, 6))
 
@@ -193,7 +244,7 @@ class TimelinePanel(tk.Toplevel):
             w.destroy()
         self._fill(match)
         self.body.update_idletasks()
-        w = max(220, self.body.winfo_reqwidth() + 32)
+        w = max(340, self.body.winfo_reqwidth() + 32)
         h = self.body.winfo_reqheight() + 24
         self._size = (w, h)
         self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
@@ -224,7 +275,7 @@ class TimelinePanel(tk.Toplevel):
             w.destroy()
         self._fill(match)
         self.body.update_idletasks()
-        w = max(220, self.body.winfo_reqwidth() + 32)
+        w = max(340, self.body.winfo_reqwidth() + 32)
         h = self.body.winfo_reqheight() + 24
         self._size = (w, h)
         self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
