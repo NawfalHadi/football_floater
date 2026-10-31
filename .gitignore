@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.DS_Store
+
+# local runtime state
+settings.json
+pill_positions.json
+
+# tooling / agent artifacts
+graphify-out/
+_split_main.py
+*.original.md
