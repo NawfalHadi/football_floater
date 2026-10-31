@@ -41,7 +41,8 @@ Tokens live in `football_floater/config.py` (sizes/timing) and `football_floater
 | Token | Hex | Meaning |
 |---|---|---|
 | `PL_GREEN` | `#00FF85` | Goal, "on" state, kickoff time |
-| `PL_PINK` | `#E90052` | Live match minute |
+| `PL_PINK` | `#E90052` | Brand accent (avoid for tiny text on dark glass) |
+| `CLOCK_LIVE` | `#FF7EB6` | Live match minute — brighter than brand pink for contrast |
 | `PL_PURPLE` | `#3D195B` | Menu highlight, panel tint |
 | `PL_CYAN` | `#04F5FF` | Reserved (not used for meaning yet) |
 
@@ -57,7 +58,7 @@ Tokens live in `football_floater/config.py` (sizes/timing) and `football_floater
 | Match state | Example | Color |
 |---|---|---|
 | Not started | `20:00` | `PL_GREEN` |
-| Live | `64'` | `PL_PINK` |
+| Live | `64'` | `CLOCK_LIVE` |
 | Finished | `FT` | `MUTED` |
 
 ---
@@ -128,7 +129,7 @@ Minimized (icon strip): `⋮⋮  ↻  ⚽  F  H  ⚙  ▢  ✕`
 ### Startup / Settings dialog
 Shown **every app open** unless **Don't ask next time** is checked.
 
-- **Leagues:** Premier League (`eng.1`), Bundesliga (`ger.1`) — multi-select
+- **Leagues:** Premier League (`eng.1`), Bundesliga (`ger.1`) — multi-select with league logos
 - **Match types:** Past / Live / Future (matchday window)
 - **Display:** detected monitors (Windows API / xrandr / Gdk / Tk fallback). Default radio = OS **primary** until user picks. Free-float pills also spawn on that screen’s bottom-right.
 - Opt-out checkbox; reopen anytime via **Settings**
@@ -180,10 +181,10 @@ CHE  2 - 0  MUN                64'
 ```
 
 - Header: teams + score (bold), clock right-aligned in clock color.
-- Rows: minute (muted) · tag (colored word) · player, with assist on a second muted line.
-- Suffixes: `(P)` penalty, `(OG)` own goal. Own goals never show an assist.
+- Rows: minute · event icon (goal / penalty / yellow / red) · player; assist row uses assist icon.
+- Own goals keep `(OG)` suffix. Penalties use penalty icon (no text `(P)`). Assists skipped on pens/OG.
 - Empty state: "No goals or cards yet".
-- Positioned centered above its anchor; flips below if it would go off the top of the screen.
+- Placement: ticker click → prefer **above** ticker, flip below only if clipped. Pill click → beside first (left of right-edge stack). Clamp to **monitor that holds the anchor** (multi-display safe).
 
 ### Goal popup (`GoalBubble`)
 

@@ -15,6 +15,8 @@ MUTED = "#AEAEB2"
 PL_PURPLE = "#3D195B"
 PL_GREEN = "#00FF85"
 PL_PINK = "#E90052"
+# Live clock on dark glass — brighter than brand pink (was near-invisible)
+CLOCK_LIVE = "#FF7EB6"
 CARD_YELLOW = "#FFD60A"
 DANGER = "#FF6B6B"
 

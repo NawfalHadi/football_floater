@@ -2,8 +2,16 @@
 from pathlib import Path
 
 LEAGUES = {
-    "eng.1": {"name": "Premier League", "short": "PL"},
-    "ger.1": {"name": "Bundesliga", "short": "BL"},
+    "eng.1": {
+        "name": "Premier League",
+        "short": "PL",
+        "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/eng.1.png",
+    },
+    "ger.1": {
+        "name": "Bundesliga",
+        "short": "BL",
+        "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/ger.1.png",
+    },
 }
 REFRESH_RATE = 60
 ANIMATION_SPEED = 40

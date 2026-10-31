@@ -2,7 +2,7 @@
 import tkinter as tk
 
 from .config import WINDOW_ALPHA
-from .theme import CHROMA, MUTED, PL_GREEN, PL_PINK
+from .theme import CHROMA, CLOCK_LIVE, MUTED, PL_GREEN
 
 
 def setup_overlay(win, alpha=WINDOW_ALPHA):
@@ -24,4 +24,4 @@ def clock_color(t):
         return MUTED
     if ":" in t:
         return PL_GREEN
-    return PL_PINK
+    return CLOCK_LIVE

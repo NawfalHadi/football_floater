@@ -538,12 +538,11 @@ class SmartTicker:
                 type_txt = d.get("type", {}).get("text", "") or ""
                 evt = {"time": clock, "player": self.get_player_name_from_detail(d), "assist": None, "type": "other"}
                 if self.is_scoring_detail(d, type_txt):
-                    evt["type"] = "goal"
+                    is_pen = bool(d.get("penaltyKick") or ("Penalty" in type_txt and "Scored" in type_txt))
+                    evt["type"] = "penalty" if is_pen else "goal"
                     evt["own_goal"] = bool(d.get("ownGoal") or "Own Goal" in type_txt)
                     if evt["own_goal"]:
                         evt["player"] += " (OG)"
-                    if d.get("penaltyKick") or "Penalty" in type_txt:
-                        evt["player"] += " (P)"
                     events_list.append(evt)
                 elif "Card" in type_txt:
                     evt["type"] = "red" if "Red" in type_txt else "yellow"
@@ -593,7 +592,7 @@ class SmartTicker:
         return out
 
     def enrich_assists(self, m, score):
-        goals = [e for e in m["history_list"] if e["type"] == "goal"]
+        goals = [e for e in m["history_list"] if e["type"] in ("goal", "penalty")]
         if not goals:
             return
         cached = self.assist_cache.get(m["id"])
@@ -609,12 +608,12 @@ class SmartTicker:
             a = by_clock.get(g["time"])
             if a is None and i < len(assists):
                 a = assists[i][1]
-            if a and not g.get("own_goal"):
+            if a and not g.get("own_goal") and g["type"] != "penalty":
                 g["assist"] = a
 
     @staticmethod
     def goal_text(m):
-        goals = [e for e in m["history_list"] if e["type"] == "goal"]
+        goals = [e for e in m["history_list"] if e["type"] in ("goal", "penalty")]
         if not goals:
             return ""
         g = goals[-1]
@@ -707,10 +706,12 @@ class SmartTicker:
             self.update_ticker_width()
             return
 
+        id_to_item = {}
         for i, m in enumerate(matches):
             item = tk.Frame(self.ticker_frame, bg=PANEL_BG, cursor="hand2")
             item.pack(side=tk.LEFT, padx=12, fill=tk.Y)
             parts = [item]
+            id_to_item[str(m["id"])] = item
 
             for side in ("home", None, "away"):
                 if side is None:
@@ -725,7 +726,7 @@ class SmartTicker:
                     )
                     score.pack()
                     clock = tk.Label(
-                        mid_box, text=m["time"], bg=PANEL_BG, fg=clock_color(m["time"]), font=FONT_TINY
+                        mid_box, text=m["time"], bg=PANEL_BG, fg=clock_color(m["time"]), font=FONT_SMALL
                     )
                     clock.pack()
                     league = tk.Label(
@@ -743,11 +744,13 @@ class SmartTicker:
                 lbl.pack(side=tk.LEFT)
                 parts.append(lbl)
 
+            def _open_timeline(_e=None, mm=m, a=item):
+                # lock before toggle — chip may sit under cursor without <Enter>
+                self.scroll_locked = True
+                self.timeline.toggle(mm, a, prefer_above_ticker=True)
+
             for w in parts:
-                w.bind(
-                    "<Button-1>",
-                    lambda e, mm=m, a=item: self.timeline.toggle(mm, a, prefer_above_ticker=True),
-                )
+                w.bind("<Button-1>", _open_timeline)
                 w.bind("<Enter>", lambda e: setattr(self, "hover_ticker", True))
                 w.bind("<Leave>", lambda e: setattr(self, "hover_ticker", False))
 
@@ -757,6 +760,8 @@ class SmartTicker:
             self._add_bubble(m["id"], item)
 
         self.update_ticker_width()
+        if self.timeline.is_open:
+            self.timeline.reattach_ticker_anchor(id_to_item.get(str(self.timeline.match_id)))
 
     def update_ticker_width(self):
         self.ticker_frame.update_idletasks()
