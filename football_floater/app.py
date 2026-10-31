@@ -34,6 +34,7 @@ from .config import (
     SETTINGS_FILE,
     TICKER_H,
     TICKER_W,
+    TOAST_BAND,
 )
 from .espn import scoreboard_url, summary_url
 from .matchday import countdown_text, espn_dates, in_matchday, matchday_window, parse_espn_dt
@@ -54,7 +55,7 @@ from .theme import (
     make_glass,
 )
 from .widgets.control_dock import ControlDock
-from .widgets.goal_bubble import GoalBubble
+from .widgets.goal_bubble import GoalBubble, TickerToast
 from .widgets.match_pill import MatchPill
 from .widgets.settings_dialog import StartupSettingsDialog
 from .widgets.timeline import TimelinePanel
@@ -183,15 +184,19 @@ class SmartTicker:
             pass
 
     # ---------- ticker window ----------
+    def _ticker_root_h(self):
+        return TICKER_H + TOAST_BAND
+
     def setup_ticker_window(self):
         setup_overlay(self.root)
         self.ticker_bg = tk.Label(self.root, bg=CHROMA, bd=0)
         self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
         self.ticker_bg.configure(image=self._ticker_ph)
-        self.ticker_bg.place(x=0, y=0, width=TICKER_W, height=TICKER_H)
+        # Glass sits under a chroma toast band so in-window toasts can place() above it.
+        self.ticker_bg.place(x=0, y=TOAST_BAND, width=TICKER_W, height=TICKER_H)
 
         self.ticker_body = tk.Frame(self.root, bg=PANEL_BG)
-        self.ticker_body.place(x=24, y=6, width=TICKER_W - 48, height=TICKER_H - 12)
+        self.ticker_body.place(x=24, y=TOAST_BAND + 6, width=TICKER_W - 48, height=TICKER_H - 12)
         self.clip_frame = tk.Frame(self.ticker_body, bg=PANEL_BG)
         self.clip_frame.pack(fill=tk.BOTH, expand=True)
         self.ticker_frame = tk.Frame(self.clip_frame, bg=PANEL_BG)
@@ -206,13 +211,14 @@ class SmartTicker:
 
         # Temporary place; apply_display_layout() keeps a saved spot that is still on a screen
         mon = get_monitor(self.settings.get("monitor_index"), self.root)
+        root_h = self._ticker_root_h()
         pos = self.settings.get("ticker_pos")
-        if pos and len(pos) >= 2 and self.spot_on_screen(pos[0], pos[1], TICKER_W, TICKER_H):
+        if pos and len(pos) >= 2 and self.spot_on_screen(pos[0], pos[1], TICKER_W, root_h):
             tx, ty = int(pos[0]), int(pos[1])
         else:
             tx = mon["x"] + (mon["w"] - TICKER_W) // 2
             ty = mon["y"] + 80
-        self.root.geometry(f"{TICKER_W}x{TICKER_H}+{tx}+{ty}")
+        self.root.geometry(f"{TICKER_W}x{root_h}+{tx}+{ty}")
 
     def selected_monitor(self):
         return get_monitor(self.settings.get("monitor_index"), self.root)
@@ -239,12 +245,13 @@ class SmartTicker:
     def apply_display_layout(self, force=False):
         """Restore ticker and dock. A spot off every screen goes back to the default on the chosen monitor."""
         mon = self.selected_monitor()
+        root_h = self._ticker_root_h()
         pos = self.settings.get("ticker_pos")
         if (
             not force
             and pos
             and len(pos) >= 2
-            and self.spot_on_screen(pos[0], pos[1], TICKER_W, TICKER_H)
+            and self.spot_on_screen(pos[0], pos[1], TICKER_W, root_h)
         ):
             tx, ty = int(pos[0]), int(pos[1])
         else:
@@ -252,7 +259,7 @@ class SmartTicker:
             ty = mon["y"] + 80
             self.settings["ticker_pos"] = [tx, ty]
 
-        self.root.geometry(f"{TICKER_W}x{TICKER_H}+{tx}+{ty}")
+        self.root.geometry(f"{TICKER_W}x{root_h}+{tx}+{ty}")
         self.root.update_idletasks()
 
         if hasattr(self, "dock"):
@@ -269,7 +276,7 @@ class SmartTicker:
                 dx, dy = int(cpos[0]), int(cpos[1])
             else:
                 dx = mon["x"] + max(0, (mon["w"] - cw) // 2)
-                dy = ty + TICKER_H + ROW_GAP
+                dy = ty + root_h + ROW_GAP
                 dx = min(max(dx, mon["x"]), mon["x"] + mon["w"] - min(cw, mon["w"]))
                 dy = min(max(dy, mon["y"]), mon["y"] + mon["h"] - min(ch, mon["h"]))
                 self.settings["ctrl_pos"] = [int(dx), int(dy)]
@@ -282,6 +289,11 @@ class SmartTicker:
         self.image_cache.clear()
         self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
         self.ticker_bg.configure(image=self._ticker_ph)
+        try:
+            self.ticker_bg.place(x=0, y=TOAST_BAND, width=TICKER_W, height=TICKER_H)
+            self.ticker_body.place(x=24, y=TOAST_BAND + 6, width=TICKER_W - 48, height=TICKER_H - 12)
+        except tk.TclError:
+            pass
         for w in (self.ticker_body, self.clip_frame, self.ticker_frame):
             try:
                 w.configure(bg=PANEL_BG)
@@ -322,11 +334,6 @@ class SmartTicker:
             if self.scroll_x < -self.content_width:
                 self.scroll_x = self.clip_frame.winfo_width()
             self.ticker_frame.place(x=self.scroll_x, y=0, relheight=1.0)
-            # Flush place before bubble sync — else winfo_rootx is stale and toast lags / sticks.
-            try:
-                self.ticker_frame.update_idletasks()
-            except tk.TclError:
-                pass
         self.check_expired_alerts()
         self.sync_bubbles()
         self.tick_countdowns()
@@ -410,33 +417,54 @@ class SmartTicker:
         return rects
 
     def sync_bubbles(self):
-        avoid = self._avoid_rects() if self.free_float else []
-        placed = []
+        if self.free_float:
+            avoid = self._avoid_rects()
+            placed = []
+            for _key, anchor, bubble, slot in self.active_bubbles:
+                try:
+                    if not anchor.winfo_exists():
+                        bubble.hide()
+                        continue
+                    ax, ay = anchor.winfo_rootx(), anchor.winfo_rooty()
+                    aw = max(anchor.winfo_width(), PILL_W)
+                    ah = max(anchor.winfo_height(), PILL_H)
+                    bx, by = bubble.place_near(
+                        (ax, ay, aw, ah),
+                        lift=slot * (bubble.h + 4),
+                        bounds=self._bubble_bounds(ax, ay),
+                        avoid=avoid + placed,
+                        stick_above=False,
+                    )
+                    placed.append((bx, by, bubble.w, bubble.h))
+                except tk.TclError:
+                    pass
+            try:
+                self.dock.lift()
+            except tk.TclError:
+                pass
+            return
+
+        # Running-text: toast is a Frame inside root (TickerToast). Same scroll math as
+        # old main.py, but place() in-window — Toplevel geometry freezes on this WM.
+        try:
+            clip_left = self.ticker_body.winfo_x() + self.clip_frame.winfo_x()
+            clip_w = max(1, self.clip_frame.winfo_width())
+        except tk.TclError:
+            return
         for _key, anchor, bubble, slot in self.active_bubbles:
             try:
                 if not anchor.winfo_exists():
                     bubble.hide()
                     continue
-                ax, ay = anchor.winfo_rootx(), anchor.winfo_rooty()
-                aw, ah = anchor.winfo_width(), anchor.winfo_height()
-                if not self.free_float:
-                    cx, cw = self.clip_frame.winfo_rootx(), self.clip_frame.winfo_width()
-                    if ax + aw < cx or ax > cx + cw:
-                        bubble.hide()
-                        continue
-                    ay = self.root.winfo_rooty()
-                    ah = self.root.winfo_height()
-                else:
-                    aw = max(aw, PILL_W)
-                    ah = max(ah, PILL_H)
-                bx, by = bubble.place_near(
-                    (ax, ay, aw, ah),
-                    lift=slot * (bubble.h + 4),
-                    bounds=self._bubble_bounds(ax, ay),
-                    avoid=avoid + placed,
-                    stick_above=not self.free_float,
-                )
-                placed.append((bx, by, bubble.w, bubble.h))
+                aw = max(1, anchor.winfo_width())
+                local_x = clip_left + self.scroll_x + anchor.winfo_x()
+                if local_x + aw < clip_left or local_x > clip_left + clip_w:
+                    bubble.hide()
+                    continue
+                # Center toast on the match chip (old +40 offset sat over the away crest).
+                bx = local_x + (aw - bubble.w) // 2
+                bx = max(4, min(bx, TICKER_W - bubble.w - 4))
+                bubble.update_position(bx, TOAST_BAND, lift=slot * (bubble.h + 4))
             except tk.TclError:
                 pass
         try:
@@ -473,13 +501,14 @@ class SmartTicker:
     def _add_bubble(self, mid, anchor):
         for slot, key in enumerate(self._alert_keys_for(mid)):
             alert = self.active_alerts[key]
-            bubble = GoalBubble(
-                self.root,
-                alert["text"],
+            kwargs = dict(
+                text=alert["text"],
                 tag=alert.get("tag", "GOAL"),
                 detail=alert.get("detail") or "",
                 lines=alert.get("lines") or None,
             )
+            # Float → separate overlay window. Running-text → in-root Frame (tracks scroll).
+            bubble = GoalBubble(self.root, **kwargs) if self.free_float else TickerToast(self.root, **kwargs)
             self.active_bubbles.append([key, anchor, bubble, slot])
 
     # ---------- free-float ----------

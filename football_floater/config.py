@@ -35,6 +35,9 @@ SETTINGS_FILE = ROOT_DIR / "settings.json"
 
 TICKER_W = 720
 TICKER_H = 56
+# Empty chroma band above the glass so running-text toasts can place() inside the
+# same window and ride scroll_x (separate Toplevels freeze on some WMs).
+TOAST_BAND = 40
 CTRL_H = 44
 CTRL_MIN_H = 36
 ROW_GAP = 8
