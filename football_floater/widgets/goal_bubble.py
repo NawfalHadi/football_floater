@@ -38,22 +38,21 @@ def stick_above_origin(anchor, bubble_w, bubble_h, bounds, lift=0):
     return bx, by
 
 
-def _tail_for_angle(deg):
-    """Which side of the bubble faces the pill (opposite the placement angle)."""
-    d = deg % 360
-    if 45 <= d < 135:
-        return "top"  # bubble below pill
-    if 135 <= d < 225:
-        return "right"  # bubble left of pill
-    if 225 <= d < 315:
-        return "bottom"  # bubble above pill
-    return "left"  # bubble right of pill
+def _tail_toward_pill(bx, by, bw, bh, ax, ay, aw, ah):
+    """Tip side from bubble center → pill center (always aims at the owner)."""
+    bcx, bcy = bx + bw / 2, by + bh / 2
+    pcx, pcy = ax + aw / 2, ay + ah / 2
+    dx, dy = pcx - bcx, pcy - bcy
+    if abs(dx) >= abs(dy):
+        return "right" if dx > 0 else "left"
+    return "bottom" if dy > 0 else "top"
 
 
 def _angle_sweep():
-    """Prefer above the pill, then fan out full 360°."""
-    seen = set()
-    out = []
+    """Cardinals first (above / below / sides), then fill the circle."""
+    primary = [270, 90, 180, 0, 240, 300, 120, 60, 210, 330, 150, 30]
+    seen = set(primary)
+    out = list(primary)
     for i in range(0, 360, 15):
         for deg in ((270 + i) % 360, (270 - i) % 360):
             if deg in seen:
@@ -63,10 +62,37 @@ def _angle_sweep():
     return out
 
 
+def _wedge_penalty(bcx, bcy, ax, ay, aw, ah, others):
+    """
+    Heavy cost when the toast sits in the side corridor between this pill and a
+    stacked neighbor — tip looks like it belongs to both.
+    """
+    pcx, pcy = ax + aw / 2, ay + ah / 2
+    penalty = 0
+    for ox, oy, ow, oh in others:
+        # Stacked = strong horizontal overlap with the owner.
+        overlap = min(ax + aw, ox + ow) - max(ax, ox)
+        if overlap < min(aw, ow) * 0.45:
+            continue
+        ocy = oy + oh / 2
+        lo, hi = (pcy, ocy) if pcy < ocy else (ocy, pcy)
+        if not (lo + 4 < bcy < hi - 4):
+            continue
+        # Beside the stack (not clearly above/below the pair).
+        stack_left = min(ax, ox)
+        stack_right = max(ax + aw, ox + ow)
+        if bcx < stack_left - 4 or bcx > stack_right + 4:
+            penalty += 500
+        else:
+            penalty += 200
+    return penalty
+
+
 def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
     """
     Pick an empty in-bounds slot around the pill (full circle).
     Returns (x, y, tail) — top-left of the speech bitmap, and which side the tip uses.
+    Tip always aims at the owner from final geometry (not the search angle).
     """
     ax, ay, aw, ah = anchor
     if bounds:
@@ -75,7 +101,7 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
         mx, my, mw, mh = ax - 4000, ay - 4000, 8000, 8000
     gap = 6
     cx, cy = ax + aw / 2, ay + ah / 2
-    # Keep clear of the owning pill itself.
+    others = [r for r in avoid if r != (ax, ay, aw, ah)]
     blockers = list(avoid) + [(ax, ay, aw, ah)]
 
     def fits(x, y, bw, bh):
@@ -84,12 +110,19 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
         rect = (x, y, bw, bh)
         return not any(_rects_hit(rect, other) for other in blockers)
 
-    # Reach along the ray: pill radius in that direction + gap + bubble radius.
-    # (Using max(aw,ah)/2 made "above" use the pill's WIDTH and fly too far.)
+    best = None
     for ring in (0, 12, 24, 40):
         for deg in _angle_sweep():
-            tail = _tail_for_angle(deg)
-            bw, bh = speech_outer_size(body_w, body_h, tail)
+            # Provisional size from search angle; refine tip from real geometry.
+            prov_tail = "bottom"
+            d = deg % 360
+            if 45 <= d < 135:
+                prov_tail = "top"
+            elif 135 <= d < 225:
+                prov_tail = "right"
+            elif d < 45 or d >= 315:
+                prov_tail = "left"
+            bw, bh = speech_outer_size(body_w, body_h, prov_tail)
             rad = math.radians(deg)
             c, s = abs(math.cos(rad)), abs(math.sin(rad))
             pill_r = (aw / 2) * c + (ah / 2) * s
@@ -99,16 +132,36 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
             bcy = cy + math.sin(rad) * dist
             bx = int(bcx - bw / 2)
             by = int(bcy - bh / 2)
-            if fits(bx, by, bw, bh):
-                return bx, by, tail
+            if not fits(bx, by, bw, bh):
+                continue
+            tail = _tail_toward_pill(bx, by, bw, bh, ax, ay, aw, ah)
+            if tail != prov_tail:
+                bw2, bh2 = speech_outer_size(body_w, body_h, tail)
+                bx2 = int(bcx - bw2 / 2)
+                by2 = int(bcy - bh2 / 2)
+                if not fits(bx2, by2, bw2, bh2):
+                    continue
+                bx, by, bw, bh = bx2, by2, bw2, bh2
+            score = (
+                dist
+                + _wedge_penalty(bx + bw / 2, by + bh / 2, ax, ay, aw, ah, others)
+                + (0 if deg in (270, 90) else 15 if deg in (180, 0) else 30)
+            )
+            cand = (score, bx, by, tail)
+            if best is None or cand < best:
+                best = cand
 
-    # Last resort: above, even if tight — still draw a bottom tip.
+    if best is not None:
+        _score, bx, by, tail = best
+        return bx, by, tail
+
+    # Last resort: above owner, tip down.
     bw, bh = speech_outer_size(body_w, body_h, "bottom")
     bx = int(cx - bw / 2)
     by = int(ay - gap - bh)
     bx = max(mx + 4, min(bx, mx + mw - bw - 4))
     by = max(my + 4, min(by, my + mh - bh - 4))
-    return bx, by, "bottom"
+    return bx, by, _tail_toward_pill(bx, by, bw, bh, ax, ay, aw, ah)
 
 
 def _fill_toast_body(body, text, tag, detail, lines):
