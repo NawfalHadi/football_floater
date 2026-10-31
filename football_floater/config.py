@@ -12,6 +12,11 @@ LEAGUES = {
         "short": "BL",
         "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/ger.1.png",
     },
+    "esp.1": {
+        "name": "La Liga",
+        "short": "LL",
+        "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/esp.1.png",
+    },
 }
 REFRESH_RATE = 90
 ANIMATION_SPEED = 40
