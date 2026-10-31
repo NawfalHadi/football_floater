@@ -197,8 +197,9 @@ class TimelinePanel(tk.Toplevel):
             pass
 
     def _fill(self, match):
+        """Build header (+ events). Returns True when event rows are present."""
         head = tk.Frame(self.body, bg=PANEL_BG)
-        head.pack(fill=tk.X, pady=(0, 6))
+        head.pack(fill=tk.X, pady=(0, 2))
         head.columnconfigure(0, weight=1, uniform="head")
         head.columnconfigure(1, weight=0)
         head.columnconfigure(2, weight=1, uniform="head")
@@ -225,21 +226,42 @@ class TimelinePanel(tk.Toplevel):
             clock_text = countdown_text(match.get("kickoff")) or match["time"]
         self._clock_lbl = tk.Label(head, text=clock_text, bg=PANEL_BG, fg=clock_color(clock_text), font=FONT_TINY)
         self._clock_lbl.grid(row=1, column=1, pady=(2, 0))
-        tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(0, 6))
 
         events = self.app.match_details_cache.get(match["id"], [])
         if not events:
-            empty = (
-                "Waiting for kickoff"
-                if match.get("state") == "pre"
-                else "No goals, cards, or subs yet"
-            )
-            tk.Label(self.body, text=empty, bg=PANEL_BG, fg=MUTED, font=FONT_UI).pack(anchor="w")
+            # Pre-match: header + KO only — no hollow "empty list" band.
+            if match.get("state") != "pre":
+                tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(6, 6))
+                tk.Label(
+                    self.body,
+                    text="No goals, cards, or subs yet",
+                    bg=PANEL_BG,
+                    fg=MUTED,
+                    font=FONT_UI,
+                ).pack(anchor="center")
+            return False
+
+        tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(6, 6))
         for kind, evs in self._group_events(events):
             if kind == "subs":
                 self._render_sub_group(evs)
             else:
                 self._render_event(evs[0])
+        return True
+
+    def _resize_to_body(self, has_events):
+        """Glass size follows content. Empty/pre cards stay compact; event lists keep a wider floor."""
+        self.body.update_idletasks()
+        pad_x, pad_y = 32, 24
+        req_w = self.body.winfo_reqwidth() + pad_x
+        req_h = self.body.winfo_reqheight() + pad_y
+        min_w = 340 if has_events else 200
+        w, h = max(min_w, req_w), req_h
+        self._size = (w, h)
+        self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
+        self.bg.configure(image=self._ph)
+        self.geometry(f"{w}x{h}")
+        self.body.place(x=16, y=12)
 
     def open(self, match, anchor, prefer_above_ticker=False):
         # lock scroll immediately so the next animation frame cannot move the match
@@ -249,14 +271,8 @@ class TimelinePanel(tk.Toplevel):
         self._icon_refs = []
         for w in self.body.winfo_children():
             w.destroy()
-        self._fill(match)
-        self.body.update_idletasks()
-        w = max(340, self.body.winfo_reqwidth() + 32)
-        h = self.body.winfo_reqheight() + 24
-        self._size = (w, h)
-        self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
-        self.bg.configure(image=self._ph)
-        self.body.place(x=16, y=12)
+        has_events = self._fill(match)
+        self._resize_to_body(has_events)
 
         self.match_id = match["id"]
         self._follow = anchor if (not prefer_above_ticker and isinstance(anchor, MatchPill)) else None
@@ -280,14 +296,8 @@ class TimelinePanel(tk.Toplevel):
         self._icon_refs = []
         for w in self.body.winfo_children():
             w.destroy()
-        self._fill(match)
-        self.body.update_idletasks()
-        w = max(340, self.body.winfo_reqwidth() + 32)
-        h = self.body.winfo_reqheight() + 24
-        self._size = (w, h)
-        self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
-        self.bg.configure(image=self._ph)
-        self.body.place(x=16, y=12)
+        has_events = self._fill(match)
+        self._resize_to_body(has_events)
         self._place_smart()
 
     def refresh_countdown(self):
