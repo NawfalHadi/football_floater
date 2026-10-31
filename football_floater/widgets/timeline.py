@@ -229,9 +229,12 @@ class TimelinePanel(tk.Toplevel):
 
         events = self.app.match_details_cache.get(match["id"], [])
         if not events:
-            tk.Label(self.body, text="No goals, cards, or subs yet", bg=PANEL_BG, fg=MUTED, font=FONT_UI).pack(
-                anchor="w"
+            empty = (
+                "Waiting for kickoff"
+                if match.get("state") == "pre"
+                else "No goals, cards, or subs yet"
             )
+            tk.Label(self.body, text=empty, bg=PANEL_BG, fg=MUTED, font=FONT_UI).pack(anchor="w")
         for kind, evs in self._group_events(events):
             if kind == "subs":
                 self._render_sub_group(evs)

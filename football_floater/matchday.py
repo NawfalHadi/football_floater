@@ -44,7 +44,7 @@ def in_matchday(kickoff, window=None):
 
 
 def countdown_text(kickoff, now=None):
-    """Time until kickoff, always `H:MM:SS` so it does not look like a kickoff clock."""
+    """Time until kickoff. Prefixed so it is not read as a live match clock."""
     if kickoff is None:
         return None
     kickoff = to_local(kickoff)
@@ -54,7 +54,9 @@ def countdown_text(kickoff, now=None):
         remaining = 0
     hours, rem = divmod(remaining, 3600)
     minutes, seconds = divmod(rem, 60)
-    return f"{hours}:{minutes:02d}:{seconds:02d}"
+    if hours:
+        return f"KO in {hours}:{minutes:02d}:{seconds:02d}"
+    return f"KO in {minutes}:{seconds:02d}"
 
 
 def espn_dates(start, end):
