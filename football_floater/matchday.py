@@ -1,15 +1,26 @@
 """Matchday window (local 06:00 rollover) + ESPN datetime parse."""
-from datetime import datetime, timedelta, time as dtime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from .config import MATCHDAY_ROLLOVER_HOUR
 
 
+def local_now():
+    """Current time in the user's timezone. `astimezone()` with no args is the OS local zone."""
+    return datetime.now().astimezone()
+
+
+def to_local(dt):
+    """Convert an ESPN instant to the user's local timezone. Naive values are UTC."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+    return dt.astimezone()
+
+
 def local_tz():
-    try:
-        return datetime.now().astimezone().tzinfo
-    except Exception:
-        return ZoneInfo("UTC")
+    return local_now().tzinfo
 
 
 def matchday_window(now=None):
@@ -18,32 +29,26 @@ def matchday_window(now=None):
     Before 06:00 local, slate is still yesterday — covers late kicks (e.g. 04:00)
     without pulling the next evening's slate (20:00).
     """
-    now = now or datetime.now(local_tz())
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=local_tz())
+    now = to_local(now) if now is not None else local_now()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     if now.hour < MATCHDAY_ROLLOVER_HOUR:
-        slate = now.date() - timedelta(days=1)
-    else:
-        slate = now.date()
-    start = datetime.combine(slate, dtime(MATCHDAY_ROLLOVER_HOUR, 0), tzinfo=now.tzinfo)
+        midnight -= timedelta(days=1)
+    start = midnight + timedelta(hours=MATCHDAY_ROLLOVER_HOUR)
     return start, start + timedelta(days=1)
 
 
 def in_matchday(kickoff, window=None):
     start, end = window or matchday_window()
-    if kickoff.tzinfo is None:
-        kickoff = kickoff.replace(tzinfo=start.tzinfo)
-    else:
-        kickoff = kickoff.astimezone(start.tzinfo)
-    return start <= kickoff < end
+    kickoff = to_local(kickoff)
+    return to_local(start) <= kickoff < to_local(end)
 
 
 def countdown_text(kickoff, now=None):
     """Time until kickoff, always `H:MM:SS` so it does not look like a kickoff clock."""
     if kickoff is None:
         return None
-    if now is None:
-        now = datetime.now(kickoff.tzinfo) if kickoff.tzinfo else datetime.now()
+    kickoff = to_local(kickoff)
+    now = to_local(now) if now is not None else local_now()
     remaining = int((kickoff - now).total_seconds())
     if remaining < 0:
         remaining = 0
@@ -52,7 +57,20 @@ def countdown_text(kickoff, now=None):
     return f"{hours}:{minutes:02d}:{seconds:02d}"
 
 
+def espn_dates(start, end):
+    """Calendar dates to ask ESPN for. Include both local and UTC, since the feed keys off UTC."""
+    dates = set()
+    for dt in (start, end - timedelta(minutes=1)):
+        local = to_local(dt)
+        dates.add(local.strftime("%Y%m%d"))
+        dates.add(local.astimezone(ZoneInfo("UTC")).strftime("%Y%m%d"))
+    return dates
+
+
 def parse_espn_dt(value):
-    """ESPN uses ...Z; Python 3.14 strptime no longer accepts literal Z in format."""
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    """ESPN uses ...Z. Return that instant in the user's local timezone."""
+    utc = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if utc.tzinfo is None:
+        utc = utc.replace(tzinfo=ZoneInfo("UTC"))
+    return to_local(utc)
 

@@ -2,8 +2,9 @@
 import json
 import threading
 import time
+import traceback
 import tkinter as tk
-from datetime import datetime, timedelta
+from datetime import datetime
 from io import BytesIO
 from zoneinfo import ZoneInfo
 
@@ -34,7 +35,7 @@ from .config import (
     TICKER_W,
 )
 from .espn import scoreboard_url, summary_url
-from .matchday import countdown_text, in_matchday, matchday_window, parse_espn_dt
+from .matchday import countdown_text, espn_dates, in_matchday, matchday_window, parse_espn_dt
 from .monitors import get_monitor, list_monitors
 from .overlay import clock_color, setup_overlay
 from .theme import (
@@ -675,7 +676,7 @@ class SmartTicker:
             elif state == "post":
                 time_str = "FT"
             else:
-                time_str = kickoff.astimezone(local_tz()).strftime("%H:%M")
+                time_str = kickoff.strftime("%H:%M")
             competitors = event["competitions"][0]["competitors"]
             home = next(c for c in competitors if c["homeAway"] == "home")
             away = next(c for c in competitors if c["homeAway"] == "away")
@@ -928,7 +929,7 @@ class SmartTicker:
     def fetch_matchday_events(self):
         """Pull scoreboards for each selected league across the matchday window dates."""
         start, end = matchday_window()
-        dates = {start.strftime("%Y%m%d"), (start + timedelta(days=1)).strftime("%Y%m%d")}
+        dates = espn_dates(start, end)
         # (league_id, event) pairs; key by league:espn_id
         by_key = {}
         for league_id in self.selected_leagues():
@@ -974,7 +975,7 @@ class SmartTicker:
             self.current_matches = parsed
             self.root.after(0, lambda: self.render_matches(parsed))
         except Exception:
-            pass
+            traceback.print_exc()
         finally:
             try:
                 self.root.after(0, lambda: self.dock.set_refresh("Refresh"))
