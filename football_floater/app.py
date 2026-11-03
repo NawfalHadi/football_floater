@@ -64,7 +64,7 @@ from .theme import (
 )
 from .widgets.coach_tip import CoachTip
 from .widgets.control_dock import ControlDock
-from .widgets.goal_bubble import GoalBubble, TickerToast
+from .widgets.goal_bubble import TickerToast
 from .widgets.match_pill import MatchPill
 from .widgets.settings_dialog import StartupSettingsDialog
 from .widgets.timeline import TimelinePanel
@@ -74,6 +74,8 @@ class SmartTicker:
     def __init__(self, root):
         self.root = root
         self.image_cache = {}
+        self._icon_inflight = set()
+        self._icon_refresh_job = None
         self.last_scores = {}
         self.sub_seen = {}
         self.sub_cache = {}
@@ -102,6 +104,8 @@ class SmartTicker:
         self._countdown_ms = 0
         self._move_off = (0, 0)
         self._dragging = False
+        self._ctx_menu = None
+        self._ctx_binds = []
 
         self.setup_ticker_window()
         self.timeline = TimelinePanel(self)
@@ -110,23 +114,31 @@ class SmartTicker:
         if self.free_float:
             self.set_ticker_visible(False)
 
-        # Every launch: ask leagues + display unless user opted out
+        # Every launch: ask leagues + display unless user opted out.
+        # Do NOT start the data loop under the startup dialog — pills would pop
+        # in one-by-one behind a panel the user is still configuring.
         if self.settings.get("skip_startup_dialog") and self.settings.get("filters_set"):
             threading.Thread(target=self.update_data_loop, daemon=True).start()
         else:
             StartupSettingsDialog(self, startup=True)
-            self.root.after(500, self._ensure_data_loop)
 
         self.animate_ticker()
 
     def _ensure_data_loop(self):
         if getattr(self, "_loop_started", False):
             return
-        if self.settings.get("filters_set"):
-            self._loop_started = True
-            threading.Thread(target=self.update_data_loop, daemon=True).start()
-        else:
-            self.root.after(500, self._ensure_data_loop)
+        if not self.settings.get("filters_set"):
+            return
+        self._loop_started = True
+        threading.Thread(target=self.update_data_loop, daemon=True).start()
+
+    def pill_glass_image(self):
+        """Shared idle pill glass — one Pillow draw for all MatchPills."""
+        ph = getattr(self, "_pill_glass_ph", None)
+        if ph is None:
+            self._pill_glass_ph = ImageTk.PhotoImage(make_glass(PILL_W, PILL_H))
+            ph = self._pill_glass_ph
+        return ph
 
     # ---------- persistence ----------
     def load_settings(self):
@@ -252,7 +264,7 @@ class SmartTicker:
         """Drop solid-mode empty band when no in-ticker toasts remain."""
         if not solid_mode():
             return
-        if any(not isinstance(b[2], GoalBubble) for b in self.active_bubbles):
+        if self.active_bubbles:
             return
         idle = self._default_toast_band()
         if self.toast_band != idle:
@@ -358,6 +370,7 @@ class SmartTicker:
         """Repaint ticker, dock, and pills after a theme change."""
         apply_theme(self.settings.get("theme") or "default")
         self.image_cache.clear()
+        self._pill_glass_ph = None
         self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
         self.ticker_bg.configure(image=self._ticker_ph)
         self._apply_ticker_chrome()
@@ -426,7 +439,12 @@ class SmartTicker:
             return
         self.settings["seen_coach_toast"] = True
         self.save_settings()
-        CoachTip(self, "Goal alerts pop up here. They clear on their own.", near=near)
+        tip = (
+            "Goals flash on the pill. They clear on their own."
+            if self.free_float
+            else "Goal alerts pop up here. They clear on their own."
+        )
+        CoachTip(self, tip, near=near)
 
     def maybe_coach_pill(self, near=None):
         if self.settings.get("seen_coach_pill"):
@@ -475,7 +493,8 @@ class SmartTicker:
 
     def check_expired_alerts(self):
         now = time.time()
-        for mid in [m for m, d in self.active_alerts.items() if now > d["expires"]]:
+        expired = [m for m, d in self.active_alerts.items() if now > d["expires"]]
+        for mid in expired:
             del self.active_alerts[mid]
         kept = []
         for key, anchor, bubble, _slot in self.active_bubbles:
@@ -488,6 +507,10 @@ class SmartTicker:
                     pass
         self.active_bubbles = kept
         self._shrink_toast_band_if_idle()
+        # Only push pill UI when alerts actually changed — syncing every frame
+        # was re-entering idle and flickering like crazy.
+        if self.free_float and expired:
+            self._sync_pill_alerts()
 
     def tick_countdowns(self):
         self._countdown_ms += ANIMATION_SPEED
@@ -510,59 +533,9 @@ class SmartTicker:
         if self.timeline.is_open:
             self.timeline.refresh_countdown()
 
-    def _avoid_rects(self):
-        rects = []
-        for pill in self.match_pills.values():
-            try:
-                if not pill.winfo_exists():
-                    continue
-                rects.append(
-                    (
-                        pill.winfo_rootx(),
-                        pill.winfo_rooty(),
-                        max(pill.winfo_width(), PILL_W),
-                        max(pill.winfo_height(), PILL_H),
-                    )
-                )
-            except tk.TclError:
-                pass
-        return rects
-
     def sync_bubbles(self):
+        # Free-float: alerts live inside MatchPill — no overlay bubbles.
         if self.free_float:
-            if self.overlay_hidden:
-                for _key, _anchor, bubble, _slot in self.active_bubbles:
-                    try:
-                        bubble.hide()
-                    except tk.TclError:
-                        pass
-                return
-            avoid = self._avoid_rects()
-            placed = []
-            # Stack toasts above their own pill (slot lifts). Sticky placement stops
-            # crowded screens from jumping tips between neighbors every frame.
-            for _key, anchor, bubble, slot in self.active_bubbles:
-                try:
-                    if not anchor.winfo_exists():
-                        bubble.hide()
-                        continue
-                    ax, ay = anchor.winfo_rootx(), anchor.winfo_rooty()
-                    aw = max(anchor.winfo_width(), PILL_W)
-                    ah = max(anchor.winfo_height(), PILL_H)
-                    bx, by = bubble.place_near(
-                        (ax, ay, aw, ah),
-                        lift=slot * (bubble.h + 6),
-                        bounds=self._bubble_bounds(ax, ay),
-                        avoid=avoid + placed,
-                        stick_above=True,
-                    )
-                    placed.append((bx, by, bubble.w, bubble.h))
-                except tk.TclError:
-                    pass
-            try:
-                self.dock.lift()
-            except tk.TclError:
-                pass
             return
 
         # Running-text: toast is a Frame inside root (TickerToast). Same scroll math as
@@ -604,42 +577,58 @@ class SmartTicker:
         self.active_bubbles = []
         self._shrink_toast_band_if_idle()
 
-    def _bubble_bounds(self, x, y):
-        for mon in list_monitors(self.root):
-            if mon["x"] <= x < mon["x"] + mon["w"] and mon["y"] <= y < mon["y"] + mon["h"]:
-                return mon["x"], mon["y"], mon["w"], mon["h"]
-        mon = self.selected_monitor()
-        return mon["x"], mon["y"], mon["w"], mon["h"]
-
     def _alert_keys_for(self, mid):
         now = time.time()
+        mid = str(mid)
         keys = []
-        if mid in self.active_alerts and now < self.active_alerts[mid]["expires"]:
-            keys.append(mid)
+        # Alerts may be keyed by raw or str id — accept both.
+        for key in (mid,):
+            if key in self.active_alerts and now < self.active_alerts[key]["expires"]:
+                keys.append(key)
+        for key, alert in list(self.active_alerts.items()):
+            if str(key) == mid and key not in keys and now < alert["expires"]:
+                keys.append(key)
         prefix = f"{mid}|sub|"
         for key, alert in self.active_alerts.items():
-            if str(key).startswith(prefix) and now < alert["expires"]:
+            if str(key).startswith(prefix) and now < alert["expires"] and key not in keys:
                 keys.append(key)
         return keys
 
+    def _alerts_for_match(self, mid):
+        out = []
+        for key in self._alert_keys_for(mid):
+            alert = self.active_alerts.get(key)
+            if not alert:
+                continue
+            payload = dict(alert)
+            payload["key"] = key
+            out.append(payload)
+        return out
+
+    def _sync_pill_alerts(self):
+        for mid, pill in self.match_pills.items():
+            try:
+                pill.sync_alerts(self._alerts_for_match(mid))
+            except tk.TclError:
+                pass
+
     def _add_bubble(self, mid, anchor):
+        """Running-text only — float mode uses MatchPill.sync_alerts."""
+        if self.free_float:
+            return
         for slot, key in enumerate(self._alert_keys_for(mid)):
             alert = self.active_alerts[key]
-            kwargs = dict(
+            bubble = TickerToast(
+                self.root,
                 text=alert["text"],
                 tag=alert.get("tag", "GOAL"),
                 detail=alert.get("detail") or "",
                 lines=alert.get("lines") or None,
             )
-            # Float → separate overlay window. Running-text → in-root Frame (tracks scroll).
-            if self.free_float:
-                bubble = GoalBubble(self.root, **kwargs)
-            else:
-                bubble = TickerToast(self.root, **kwargs)
-                self._ensure_toast_band(bubble.h, lift=slot * (bubble.h + 4))
+            self._ensure_toast_band(bubble.h, lift=slot * (bubble.h + 4))
             self.active_bubbles.append([key, anchor, bubble, slot])
-            if alert.get("tag", "GOAL") == "GOAL" and not str(key).startswith(f"{mid}|sub|"):
-                self.maybe_coach_toast(near=bubble if hasattr(bubble, "winfo_rootx") else anchor)
+            if alert.get("tag", "GOAL") in ("GOAL", "PEN") and not str(key).startswith(f"{mid}|sub|"):
+                self.maybe_coach_toast(near=anchor)
 
     # ---------- free-float ----------
     def _rects_overlap(self, x1, y1, w1, h1, x2, y2, w2, h2, pad=PILL_GAP):
@@ -738,6 +727,73 @@ class SmartTicker:
         if hasattr(self, "dock"):
             self.dock.set_hidden(len(self.hidden_pills))
 
+    def dismiss_context_menu(self, _event=None):
+        """Unpost pill/dock menus when user clicks elsewhere (other pill, dock, Esc)."""
+        menu = self._ctx_menu
+        binds = self._ctx_binds
+        self._ctx_menu = None
+        self._ctx_binds = []
+        for seq, _handler in binds:
+            try:
+                self.root.unbind_all(seq)
+            except tk.TclError:
+                pass
+        if menu is None:
+            return
+        try:
+            menu.unpost()
+        except tk.TclError:
+            pass
+        try:
+            menu.grab_release()
+        except tk.TclError:
+            pass
+        try:
+            menu.destroy()
+        except tk.TclError:
+            pass
+
+    def popup_context_menu(self, menu, x_root, y_root):
+        """Show a Menu that closes on outside click / Escape / unmap."""
+        self.dismiss_context_menu()
+        self._ctx_menu = menu
+        menu_path = str(menu)
+
+        def _outside(event):
+            if self._ctx_menu is None:
+                return
+            # Ignore presses on the menu window itself (item select).
+            try:
+                if str(event.widget).startswith(menu_path):
+                    return
+            except Exception:
+                pass
+            self.dismiss_context_menu()
+
+        def _escape(_event=None):
+            self.dismiss_context_menu()
+
+        # Defer arming so the opening right-click does not immediately dismiss.
+        def _arm():
+            if self._ctx_menu is not menu:
+                return
+            for seq, handler in (
+                ("<ButtonPress-1>", _outside),
+                ("<ButtonPress-2>", _outside),
+                ("<ButtonPress-3>", _outside),
+                ("<KeyPress-Escape>", _escape),
+            ):
+                self.root.bind_all(seq, handler, add="+")
+                self._ctx_binds.append((seq, handler))
+
+        menu.bind("<Unmap>", lambda _e: self.dismiss_context_menu(), add="+")
+        try:
+            menu.tk_popup(int(x_root), int(y_root))
+        except tk.TclError:
+            self.dismiss_context_menu()
+            return
+        self.root.after(50, _arm)
+
     def show_hidden_menu(self):
         menu = tk.Menu(self.root, tearoff=0, bg=PANEL_BG, fg=TEXT_COLOR, activebackground=PL_PURPLE)
         if not self.hidden_pills:
@@ -752,11 +808,11 @@ class SmartTicker:
         btn = getattr(self.dock, "btn_hidden", None)
         try:
             if btn is not None:
-                menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + 32)
+                self.popup_context_menu(menu, btn.winfo_rootx(), btn.winfo_rooty() + 32)
             else:
-                menu.tk_popup(self.dock.winfo_rootx(), self.dock.winfo_rooty() + 32)
-        finally:
-            menu.grab_release()
+                self.popup_context_menu(menu, self.dock.winfo_rootx(), self.dock.winfo_rooty() + 32)
+        except tk.TclError:
+            self.dismiss_context_menu()
 
     def show_settings_dialog(self):
         existing = getattr(self, "_settings_dialog", None)
@@ -840,6 +896,8 @@ class SmartTicker:
                 self.match_pills.pop(mid).destroy()
             except tk.TclError:
                 pass
+        # Build new pills withdrawn, then map together — avoids 1-by-1 pop-in.
+        fresh = []
         for m in matches:
             mid = str(m["id"])
             if mid in self.hidden_pills:
@@ -849,19 +907,35 @@ class SmartTicker:
                 self.match_pills[mid].update_match(m)
             else:
                 x, y = self.allocate_pill_pos(mid)
-                self.match_pills[mid] = MatchPill(self, m, x, y)
-                if self.overlay_hidden:
-                    try:
-                        self.match_pills[mid].withdraw()
-                    except tk.TclError:
-                        pass
+                pill = MatchPill(self, m, x, y)
+                pill.withdraw()
+                self.match_pills[mid] = pill
+                fresh.append(pill)
+        if not self.overlay_hidden:
+            for pill in fresh:
+                try:
+                    pill.deiconify()
+                    # Re-measure mid after map — create-time place used withdrawn sizes.
+                    if pill._layout == "idle":
+                        pill._place_goal_host(0)
+                        pill._paint_idle_mid()
+                except tk.TclError:
+                    pass
         self._update_hidden_chip()
         self._clear_bubbles()
-        for mid, pill in self.match_pills.items():
-            self._add_bubble(mid, pill)
+        self._sync_pill_alerts()
         if self.match_pills and not self.settings.get("seen_coach_pill"):
             first = next(iter(self.match_pills.values()))
             self.maybe_coach_pill(near=first)
+        # Coach: first GOAL/PEN on a visible pill.
+        for mid, pill in self.match_pills.items():
+            for alert in self._alerts_for_match(mid):
+                if alert.get("tag", "GOAL") in ("GOAL", "PEN"):
+                    self.maybe_coach_toast(near=pill)
+                    break
+            else:
+                continue
+            break
 
     # ---------- parsing / fetch ----------
     def get_player_name_from_detail(self, detail):
@@ -1089,7 +1163,9 @@ class SmartTicker:
             if clock not in fresh_by_clock:
                 fresh_by_clock[clock] = []
                 clocks.append(clock)
-            fresh_by_clock[clock].append({"on": s["on"], "off": s.get("off") or ""})
+            fresh_by_clock[clock].append(
+                {"on": s["on"], "off": s.get("off") or "", "side": s.get("side")}
+            )
         now = time.time()
         ttl = self._alert_ttl()
         for clock in clocks:
@@ -1187,11 +1263,18 @@ class SmartTicker:
                 headline, assist = self.goal_text(m)
                 m["last_event"] = headline
                 if mid in self.last_scores and score != self.last_scores[mid]:
+                    goals = [e for e in m["history_list"] if e["type"] in ("goal", "penalty")]
+                    last = goals[-1] if goals else None
+                    tag = "PEN" if last and last["type"] == "penalty" else "GOAL"
+                    side = last.get("side") if last else None
+                    if side not in ("home", "away"):
+                        side = None
                     self.active_alerts[mid] = {
-                        "text": headline or "GOAL!",
+                        "text": headline or ("PEN!" if tag == "PEN" else "GOAL!"),
                         "detail": assist,
                         "expires": time.time() + self._alert_ttl(),
-                        "tag": "GOAL",
+                        "tag": tag,
+                        "side": side,
                     }
                 self.last_scores[mid] = score
                 try:
@@ -1317,27 +1400,74 @@ class SmartTicker:
         self.content_width = max(300, self.ticker_frame.winfo_reqwidth())
 
     def get_team_icon(self, tla, url, size=ICON_SIZE):
+        """Cache hit only on UI thread — miss kicks a background fetch (no freeze)."""
         if not url:
             return None
         key = f"{tla}:{size}"
         if key in self.image_cache:
             return self.image_cache[key]
-        try:
-            r = requests.get(url, timeout=2)
-            if r.status_code == 200:
-                ph = ImageTk.PhotoImage(make_circle_icon(Image.open(BytesIO(r.content)), size))
-                self.image_cache[key] = ph
-                return ph
-        except Exception:
-            pass
+        self._queue_team_icon(tla, url, size)
         return None
+
+    def _queue_team_icon(self, tla, url, size):
+        key = f"{tla}:{size}"
+        if key in self.image_cache or key in self._icon_inflight:
+            return
+        self._icon_inflight.add(key)
+
+        def work():
+            raw = None
+            try:
+                r = requests.get(url, timeout=4)
+                if r.status_code == 200:
+                    raw = r.content
+            except Exception:
+                raw = None
+            self.root.after(0, lambda: self._finish_team_icon(tla, size, raw))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_team_icon(self, tla, size, raw):
+        key = f"{tla}:{size}"
+        self._icon_inflight.discard(key)
+        if raw and key not in self.image_cache:
+            try:
+                self.image_cache[key] = ImageTk.PhotoImage(
+                    make_circle_icon(Image.open(BytesIO(raw)), size)
+                )
+            except Exception:
+                pass
+        if key not in self.image_cache:
+            return
+        # Debounce — many crests land in a burst; one refresh is enough.
+        if self._icon_refresh_job is not None:
+            try:
+                self.root.after_cancel(self._icon_refresh_job)
+            except Exception:
+                pass
+        self._icon_refresh_job = self.root.after(120, self._flush_icon_refresh)
+
+    def _flush_icon_refresh(self):
+        self._icon_refresh_job = None
+        if self.free_float:
+            for pill in list(self.match_pills.values()):
+                try:
+                    pill.refresh_crests()
+                except tk.TclError:
+                    pass
+        elif self.current_matches:
+            self.render_matches(self.current_matches)
 
     # ---------- actions ----------
     def manual_refresh(self):
         self.dock.set_refresh("Refreshing…", "busy")
         threading.Thread(target=self.run_once, daemon=True).start()
 
-    def run_test_notification(self):
+    def run_test_notification(self, kind="GOAL"):
+        """Fire one alert kind on every visible match (in-pill pulse when floating)."""
+        kind = (kind or "GOAL").upper()
+        if kind not in ("GOAL", "PEN", "SUB"):
+            kind = "GOAL"
         if not self.current_matches:
             now = datetime.now(ZoneInfo("UTC"))
             lid = self.selected_leagues()[0]
@@ -1357,12 +1487,52 @@ class SmartTicker:
                     "last_event": "",
                 }
             ]
-        mid = self.current_matches[0]["id"]
-        self.active_alerts[mid] = {
-            "text": "Test Player 88'",
-            "detail": "Someone",
-            "expires": time.time() + self._alert_ttl(),
-        }
+        expires = time.time() + max(self._alert_ttl(), 12)
+        # Sample names so pill copy is readable while testing.
+        scorers = ("Saka", "Haaland", "Palmer", "Salah", "Isak", "Foden")
+        assisters = ("Ødegaard", "De Bruyne", "Saka", "Szoboszlai", "Gordon", "Bernardo")
+        on_bench = ("Nunes", "Eze", "Garnacho", "Rogers", "Mudryk", "Mainoo")
+        off_pitch = ("Grealish", "Sterling", "Antony", "McGinn", "Chilwell", "Casemiro")
+        for i, m in enumerate(self.current_matches):
+            mid = m["id"]
+            minute = f"{67 + (i % 20)}'"
+            # Drop prior test noise for this match so buttons don't stack forever.
+            self.active_alerts.pop(mid, None)
+            for key in list(self.active_alerts):
+                if str(key).startswith(f"{mid}|sub|"):
+                    del self.active_alerts[key]
+            if kind == "SUB":
+                sides = ("home", "away", "home")
+                self.active_alerts[f"{mid}|sub|test"] = {
+                    "text": minute,
+                    "lines": [
+                        {
+                            "on": on_bench[i % len(on_bench)],
+                            "off": off_pitch[i % len(off_pitch)],
+                            "side": sides[0],
+                        },
+                        {
+                            "on": on_bench[(i + 1) % len(on_bench)],
+                            "off": off_pitch[(i + 1) % len(off_pitch)],
+                            "side": sides[1],
+                        },
+                        {
+                            "on": on_bench[(i + 2) % len(on_bench)],
+                            "off": off_pitch[(i + 2) % len(off_pitch)],
+                            "side": sides[2],
+                        },
+                    ],
+                    "expires": expires,
+                    "tag": "SUB",
+                }
+            else:
+                self.active_alerts[mid] = {
+                    "text": f"{scorers[i % len(scorers)]} {minute}",
+                    "detail": "" if kind == "PEN" else assisters[i % len(assisters)],
+                    "expires": expires,
+                    "tag": kind,
+                    "side": "home" if i % 2 == 0 else "away",
+                }
         self.maybe_coach_toast(near=self.dock)
         if self.free_float:
             self.sync_free_pills(self.current_matches)

@@ -36,6 +36,7 @@ class StartupSettingsDialog(tk.Toplevel):
         self.app = app
         self.startup = startup
         self._logo_refs = []
+        self._pending_logos = []  # (label, url, size) — fetch off UI thread
         self._ph = None
         self._option_widgets = []
 
@@ -148,14 +149,26 @@ class StartupSettingsDialog(tk.Toplevel):
                 ).pack(anchor="w", pady=(4, 0))
 
             self._section("Advanced")
-            GlassButton(
+            tk.Label(
                 self.body,
-                "Test goal toast",
-                self._test_toast,
-                "test",
-                min_w=140,
-                icon="ball",
-            ).pack(anchor="w", pady=(2, 4))
+                text="Fire on every visible match (float = in-pill pulse).",
+                bg=PANEL_BG,
+                fg=MUTED,
+                font=FONT_SMALL,
+                wraplength=340,
+                justify="left",
+            ).pack(anchor="w", pady=(0, 2))
+            test_row = tk.Frame(self.body, bg=PANEL_BG)
+            test_row.pack(fill=tk.X, pady=(2, 4))
+            GlassButton(test_row, "Test GOAL", lambda: self._test_toast("GOAL"), "test", min_w=96, icon="ball").pack(
+                side=tk.LEFT
+            )
+            GlassButton(test_row, "Test PEN", lambda: self._test_toast("PEN"), "test", min_w=88).pack(
+                side=tk.LEFT, padx=(6, 0)
+            )
+            GlassButton(test_row, "Test SUB", lambda: self._test_toast("SUB"), "test", min_w=88).pack(
+                side=tk.LEFT, padx=(6, 0)
+            )
             self._check_row("Don't ask on startup", self.var_skip, muted=True)
         else:
             self._check_row("Don't ask next time", self.var_skip, muted=True)
@@ -171,18 +184,21 @@ class StartupSettingsDialog(tk.Toplevel):
             icon="gear" if not startup else None,
         ).pack(side=tk.RIGHT)
         if not startup:
+            GlassButton(actions, "Apply", self._apply, "default", min_w=88).pack(side=tk.RIGHT, padx=(0, 6))
             GlassButton(actions, "Cancel", self.destroy, "muted", min_w=88).pack(side=tk.RIGHT, padx=(0, 6))
+        else:
+            GlassButton(actions, "Cancel", self._cancel_startup, "muted", min_w=88).pack(
+                side=tk.RIGHT, padx=(0, 6)
+            )
 
-        self.protocol("WM_DELETE_WINDOW", self._save if startup else self.destroy)
+        self.protocol("WM_DELETE_WINDOW", self._cancel_startup if startup else self.destroy)
         self._resize_glass()
         self._place_center()
         self.deiconify()
         self.lift()
         self.focus_force()
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
+        # No grab_set — dock / pills stay draggable & clickable while this is open.
+        self.after(1, self._fetch_logos_async)
 
     def _section(self, title):
         tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(8, 6))
@@ -206,22 +222,27 @@ class StartupSettingsDialog(tk.Toplevel):
             width=2,
         )
         mark.pack(side=tk.LEFT)
+        logo_lbl = None
         if logo_url or short:
-            logo = self._league_logo(logo_url) if logo_url else None
-            if logo:
-                tk.Label(row, image=logo, bg=PANEL_BG, bd=0).pack(side=tk.LEFT, padx=(2, 8))
-            else:
-                badge = tk.Label(
-                    row,
-                    text=short or "?",
-                    bg=BTN_BG,
-                    fg=TEXT_COLOR,
-                    font=FONT_TINY,
-                    width=3,
-                    padx=4,
-                    pady=1,
-                )
-                badge.pack(side=tk.LEFT, padx=(2, 8))
+            # Short badge first — network logos load after dialog is on screen.
+            logo_lbl = tk.Label(
+                row,
+                text=short or "?",
+                bg=BTN_BG,
+                fg=TEXT_COLOR,
+                font=FONT_TINY,
+                width=3,
+                padx=4,
+                pady=1,
+            )
+            logo_lbl.pack(side=tk.LEFT, padx=(2, 8))
+            if logo_url:
+                cached = self._cached_league_logo(logo_url)
+                if cached:
+                    logo_lbl.configure(image=cached, text="", width=0, padx=0, pady=0, bg=PANEL_BG)
+                    logo_lbl.image = cached
+                else:
+                    self._pending_logos.append((logo_lbl, logo_url, 22))
         label = tk.Label(
             row,
             text=text,
@@ -236,7 +257,10 @@ class StartupSettingsDialog(tk.Toplevel):
             v.set(not v.get())
             m.configure(text=self._mark(v.get()), fg=self._mark_color(v.get()))
 
-        for w in (row, mark, label):
+        bind = [row, mark, label]
+        if logo_lbl is not None:
+            bind.append(logo_lbl)
+        for w in bind:
             w.bind("<Button-1>", toggle)
         self._option_widgets.append(("check", var, mark, None))
 
@@ -309,10 +333,6 @@ class StartupSettingsDialog(tk.Toplevel):
         self._dragging = False
 
     def destroy(self):
-        try:
-            self.grab_release()
-        except tk.TclError:
-            pass
         self._dragging = False
         if getattr(self.app, "_settings_dialog", None) is self:
             self.app._settings_dialog = None
@@ -324,32 +344,87 @@ class StartupSettingsDialog(tk.Toplevel):
             pass
         super().destroy()
 
-    def _league_logo(self, url, size=22):
-        if not url:
-            return None
+    def _cached_league_logo(self, url, size=22):
         cache = getattr(self.app, "image_cache", None)
-        key = f"league:{url}:{size}"
-        if cache is not None and key in cache:
-            return cache[key]
-        try:
-            r = requests.get(url, timeout=4)
-            if r.status_code != 200:
-                return None
-            ph = ImageTk.PhotoImage(make_circle_icon(Image.open(BytesIO(r.content)), size))
-            self._logo_refs.append(ph)
-            if cache is not None:
-                cache[key] = ph
-            return ph
-        except Exception:
+        if cache is None:
             return None
+        return cache.get(f"league:{url}:{size}")
+
+    def _fetch_logos_async(self):
+        pending = list(self._pending_logos)
+        self._pending_logos.clear()
+        if not pending:
+            return
+
+        def work():
+            payloads = []
+            for lbl, url, size in pending:
+                try:
+                    r = requests.get(url, timeout=4)
+                    if r.status_code != 200:
+                        continue
+                    payloads.append((lbl, url, size, r.content))
+                except Exception:
+                    continue
+            if payloads:
+                self.after(0, lambda: self._apply_logo_bytes(payloads))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_logo_bytes(self, payloads):
+        if not self.winfo_exists():
+            return
+        cache = getattr(self.app, "image_cache", None)
+        for lbl, url, size, raw in payloads:
+            try:
+                if not lbl.winfo_exists():
+                    continue
+                key = f"league:{url}:{size}"
+                if cache is not None and key in cache:
+                    ph = cache[key]
+                else:
+                    ph = ImageTk.PhotoImage(make_circle_icon(Image.open(BytesIO(raw)), size))
+                    self._logo_refs.append(ph)
+                    if cache is not None:
+                        cache[key] = ph
+                lbl.configure(image=ph, text="", width=0, padx=0, pady=0, bg=PANEL_BG)
+                lbl.image = ph
+            except Exception:
+                pass
 
     def _reset_layout(self):
         self.app.rearrange_float_pills()
 
-    def _test_toast(self):
-        self.app.run_test_notification()
+    def _test_toast(self, kind="GOAL"):
+        self.app.run_test_notification(kind)
+
+    def _apply(self):
+        self._commit(close=False)
 
     def _save(self):
+        self._commit(close=True)
+
+    def _cancel_startup(self):
+        """Just dismiss the startup panel — dock / pills stay up."""
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+        # Prior session already had filters → keep (or start) the data loop.
+        if self.app.settings.get("filters_set"):
+            self.app._ensure_data_loop()
+            if not self.app.current_matches:
+                threading.Thread(target=self.app.run_once, daemon=True).start()
+
+    def _refocus(self):
+        try:
+            if self.winfo_exists():
+                self.lift()
+                self.focus_force()
+        except tk.TclError:
+            pass
+
+    def _commit(self, close=True):
         leagues = [lid for lid, var in self.league_vars.items() if var.get()]
         if not leagues:
             leagues = ["eng.1"]
@@ -381,7 +456,9 @@ class StartupSettingsDialog(tk.Toplevel):
         self.app.save_settings()
         force_mon = prev_mon != int(self.var_monitor.get())
         app = self.app
-        self.destroy()
+        keep = None if close else self
+        if close:
+            self.destroy()
 
         def _after():
             app.end_move()
@@ -394,6 +471,12 @@ class StartupSettingsDialog(tk.Toplevel):
             app.apply_free_float(want_float)
             app._ensure_data_loop()
             threading.Thread(target=app.run_once, daemon=True).start()
+            if keep is not None:
+                try:
+                    keep._resize_glass()
+                    keep._refocus()
+                except tk.TclError:
+                    pass
 
         # Defer until after ButtonRelease so no stray B1-Motion hits the dock/ticker.
         app.root.after_idle(_after)

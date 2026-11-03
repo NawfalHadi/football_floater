@@ -151,7 +151,7 @@ def _rgba_to_chroma(img):
     return result
 
 
-def make_glass(width, height, radius=None, accent=None):
+def make_glass(width, height, radius=None, accent=None, rim=None):
     if radius is None:
         radius = height // 2 if height <= 64 else 16
     size = (width, height)
@@ -160,7 +160,7 @@ def make_glass(width, height, radius=None, accent=None):
         (0, 0, width - 1, height - 1),
         radius=radius,
         fill=_hex_rgb(PANEL_BG) + (255,),
-        outline=_hex_rgb(PANEL_RIM) + (255,),
+        outline=_hex_rgb(rim or PANEL_RIM) + (255,),
         width=1,
     )
     hl = Image.new("RGBA", size, (0, 0, 0, 0))
