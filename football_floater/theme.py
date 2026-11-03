@@ -1,11 +1,12 @@
 """Palette + Pillow glass / button drawing (chroma-key safe)."""
+import math
 import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import ICON_SIZE
 
-# Chroma key never changes — windows punch this color out.
+# Chroma key never changes — windows punch this color out (Windows).
 CHROMA = "#FF00FF"
 
 # Current look, frozen as the saved default.
@@ -97,6 +98,24 @@ ICON_BADGE = _DEFAULT["ICON_BADGE"]
 ICON_BADGE_RIM = _DEFAULT["ICON_BADGE_RIM"]
 GLASS_SHEEN = 70
 
+# Linux compat: solid panels — outside-glass fill matches PANEL_BG (no magenta bleed).
+_SOLID_MODE = False
+
+
+def set_solid_mode(on: bool):
+    global _SOLID_MODE
+    _SOLID_MODE = bool(on)
+
+
+def solid_mode() -> bool:
+    return _SOLID_MODE
+
+
+def key_color() -> str:
+    """Window / bitmap outside fill: chroma on Windows, panel bg on solid Linux."""
+    return PANEL_BG if _SOLID_MODE else CHROMA
+
+
 def _hex_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
@@ -127,7 +146,7 @@ def speech_outer_size(body_w, body_h, tail="bottom"):
 
 
 def _rgba_to_chroma(img):
-    result = Image.new("RGB", img.size, _hex_rgb(CHROMA))
+    result = Image.new("RGB", img.size, _hex_rgb(key_color()))
     result.paste(img.convert("RGB"), mask=img.getchannel("A").point(lambda a: 255 if a > 128 else 0))
     return result
 
@@ -318,15 +337,16 @@ def _draw_glyph(d, name, box, color):
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     name = name or ""
     if name == "refresh":
-        d.arc((x0, y0, x1, y1), start=40, end=300, fill=color, width=2)
-        d.polygon([(x1 - 2, cy - 1), (x1 - 6, cy + 3), (x1 + 1, cy + 3)], fill=color)
+        d.arc((x0 + 1, y0 + 1, x1 - 1, y1 - 1), start=35, end=310, fill=color, width=2)
+        d.polygon([(x1 - 1, cy - 2), (x1 - 5, cy + 3), (x1 + 2, cy + 3)], fill=color)
     elif name == "ball":
         d.ellipse((x0, y0, x1, y1), outline=color, width=2)
-        d.line((cx, y0 + 1, cx, y1 - 1), fill=color, width=1)
-        d.line((x0 + 1, cy, x1 - 1, cy), fill=color, width=1)
+        d.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), outline=color, width=1)
+        d.line((cx, y0 + 2, cx - 3, cy - 1), fill=color, width=1)
+        d.line((cx, y0 + 2, cx + 3, cy - 1), fill=color, width=1)
     elif name == "float":
         d.rounded_rectangle((x0, y0 + 1, x1, cy - 1), radius=2, outline=color, width=1)
-        d.rounded_rectangle((x0, cy + 1, x1, y1 - 1), radius=2, outline=color, width=1)
+        d.rounded_rectangle((x0 + 2, cy + 1, x1 - 2, y1 - 1), radius=2, outline=color, width=1)
     elif name == "rearrange":
         gap = 2
         hw = (x1 - x0 - gap) / 2
@@ -336,15 +356,19 @@ def _draw_glyph(d, name, box, color):
         d.rounded_rectangle((x0, y0 + hh + gap, x0 + hw, y1), radius=1, outline=color, width=1)
         d.rounded_rectangle((x0 + hw + gap, y0 + hh + gap, x1, y1), radius=1, outline=color, width=1)
     elif name == "hidden":
-        d.ellipse((x0, y0 + 2, x1, y1 - 2), outline=color, width=1)
-        d.line((x0, y1, x1, y0), fill=color, width=2)
+        # eye
+        d.ellipse((x0, cy - 3, x1, cy + 3), outline=color, width=1)
+        d.ellipse((cx - 2, cy - 2, cx + 2, cy + 2), fill=color)
     elif name == "gear":
-        d.ellipse((x0 + 2, y0 + 2, x1 - 2, y1 - 2), outline=color, width=2)
-        d.ellipse((cx - 1, cy - 1, cx + 2, cy + 2), fill=color)
-        d.line((cx, y0, cx, y0 + 3), fill=color, width=2)
-        d.line((cx, y1 - 3, cx, y1), fill=color, width=2)
-        d.line((x0, cy, x0 + 3, cy), fill=color, width=2)
-        d.line((x1 - 3, cy, x1, cy), fill=color, width=2)
+        d.ellipse((x0 + 3, y0 + 3, x1 - 3, y1 - 3), outline=color, width=2)
+        d.ellipse((cx - 1.5, cy - 1.5, cx + 1.5, cy + 1.5), fill=color)
+        for ang in (0, 45, 90, 135):
+            rad = math.radians(ang)
+            d.line(
+                (cx + 4 * math.cos(rad), cy + 4 * math.sin(rad), cx + 6.5 * math.cos(rad), cy + 6.5 * math.sin(rad)),
+                fill=color,
+                width=2,
+            )
     elif name == "mini":
         d.line((x0 + 1, cy, x1 - 1, cy), fill=color, width=2)
     elif name == "expand":

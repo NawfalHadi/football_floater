@@ -1,4 +1,7 @@
 """App constants, paths, and Tk font tuples."""
+import os
+import shutil
+import sys
 from pathlib import Path
 
 LEAGUES = {
@@ -17,6 +20,11 @@ LEAGUES = {
         "short": "LL",
         "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/esp.1.png",
     },
+    "uefa.champions": {
+        "name": "UEFA Champions League",
+        "short": "UCL",
+        "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/2.png",
+    },
 }
 REFRESH_RATE = 90
 ANIMATION_SPEED = 40
@@ -27,11 +35,39 @@ TIMELINE_IDLE_MS = 4000
 TIMELINE_LEAVE_MS = 1500
 DRAG_THRESHOLD = 4
 MATCHDAY_ROLLOVER_HOUR = 6  # local hour when football "day" rolls over
+COACH_TIP_MS = 6500
 
-# Persist next to repo root (parent of this package)
+# Package / repo root (parent of this package)
 ROOT_DIR = Path(__file__).resolve().parent.parent
-POSITIONS_FILE = ROOT_DIR / "pill_positions.json"
-SETTINGS_FILE = ROOT_DIR / "settings.json"
+
+
+def user_config_dir() -> Path:
+    """OS user config — portable .exe / AppImage friendly (not beside the binary)."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+        return base / "FootballFloater"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return Path(xdg) / "football-floater"
+    return Path.home() / ".config" / "football-floater"
+
+
+def _data_file(name: str) -> Path:
+    """Prefer user config; migrate once from old repo-root copies if present."""
+    cfg = user_config_dir()
+    dest = cfg / name
+    legacy = ROOT_DIR / name
+    try:
+        cfg.mkdir(parents=True, exist_ok=True)
+        if not dest.exists() and legacy.is_file():
+            shutil.copy2(legacy, dest)
+    except OSError:
+        pass
+    return dest
+
+
+POSITIONS_FILE = _data_file("pill_positions.json")
+SETTINGS_FILE = _data_file("settings.json")
 
 TICKER_W = 720
 TICKER_H = 56

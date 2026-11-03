@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "football-floater"
 version = "0.1.0"
-description = "Multi-league live-score desktop overlay (glass ticker + free-float pills)"
+description = "Windows-first multi-league live-score desktop overlay (glass ticker + optional float pills)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -14,6 +14,9 @@ dependencies = [
   "Pillow>=10.0.0",
   "requests>=2.31.0",
 ]
+
+[project.optional-dependencies]
+packaging = ["pyinstaller>=6.0"]
 
 [project.scripts]
 football-floater = "football_floater.app:run"

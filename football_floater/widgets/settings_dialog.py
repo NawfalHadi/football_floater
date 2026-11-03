@@ -1,4 +1,4 @@
-"""Startup / Settings glass panel (leagues, filters, monitor)."""
+"""Startup (leagues + display) and full Settings glass panel."""
 import threading
 import tkinter as tk
 from io import BytesIO
@@ -9,10 +9,9 @@ from PIL import Image, ImageTk
 from ..config import FONT_SMALL, FONT_TINY, FONT_UI, FONT_UI_BOLD, LEAGUES
 from ..matchday import matchday_window
 from ..monitors import list_monitors, resolve_monitor_index
-from ..overlay import setup_overlay
+from ..overlay import setup_overlay, window_fill
 from ..theme import (
     BTN_BG,
-    CHROMA,
     DIVIDER,
     MUTED,
     PANEL_BG,
@@ -27,9 +26,8 @@ from .glass_button import GlassButton
 
 class StartupSettingsDialog(tk.Toplevel):
     """
-    Shown on every app open (unless skip_startup_dialog).
-    Also opened from Settings. Choose leagues + past/live/future.
-    Glass capsule — same look as dock / timeline / pills.
+    Startup: leagues + display only.
+    Settings: full options (filters, theme, detach pills, advanced).
     """
 
     def __init__(self, app, startup=False):
@@ -39,10 +37,12 @@ class StartupSettingsDialog(tk.Toplevel):
         self.startup = startup
         self._logo_refs = []
         self._ph = None
-        self._option_widgets = []  # (var, kind, indicator, is_on_fn) for refresh
+        self._option_widgets = []
 
         self._move_off = (0, 0)
-        self.bg = tk.Label(self, bg=CHROMA, bd=0)
+        self._dragging = False
+        fill = window_fill()
+        self.bg = tk.Label(self, bg=fill, bd=0)
         self.bg.place(x=0, y=0)
         self.body = tk.Frame(self, bg=PANEL_BG)
 
@@ -61,12 +61,10 @@ class StartupSettingsDialog(tk.Toplevel):
         title.pack(side=tk.LEFT, fill=tk.X, expand=True)
         grip = tk.Label(bar, text="⋮⋮", bg=PANEL_BG, fg=MUTED, font=FONT_UI_BOLD, cursor="fleur")
         grip.pack(side=tk.RIGHT, padx=(8, 0))
-        for w in (bar, title, grip):
+        for w in (bar, title, grip, self.bg):
             w.bind("<ButtonPress-1>", self._start_move)
             w.bind("<B1-Motion>", self._do_move)
-        # Glass rim also drags — empty chrome around the body.
-        self.bg.bind("<ButtonPress-1>", self._start_move)
-        self.bg.bind("<B1-Motion>", self._do_move)
+            w.bind("<ButtonRelease-1>", self._end_move)
 
         tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(8, 8))
 
@@ -79,32 +77,13 @@ class StartupSettingsDialog(tk.Toplevel):
             anchor="w", pady=(0, 6)
         )
 
-        enabled = set(app.settings.get("leagues") or ["eng.1"])
+        enabled = set(app.settings.get("leagues") or list(LEAGUES.keys()))
         self.league_vars = {}
         self._section("Leagues")
         for lid, meta in LEAGUES.items():
             var = tk.BooleanVar(value=lid in enabled)
             self.league_vars[lid] = var
             self._check_row(meta["name"], var, logo_url=meta.get("logo"), short=meta["short"])
-
-        self._section("Match types")
-        self.var_past = tk.BooleanVar(value=bool(app.settings.get("show_past", True)))
-        self.var_live = tk.BooleanVar(value=bool(app.settings.get("show_live", True)))
-        self.var_future = tk.BooleanVar(value=bool(app.settings.get("show_future", True)))
-        for text, var in (
-            ("Past matches (full-time this matchday)", self.var_past),
-            ("Live matches", self.var_live),
-            ("Future matches (still this matchday)", self.var_future),
-        ):
-            self._check_row(text, var)
-
-        self._section("Theme")
-        saved_theme = app.settings.get("theme") or "default"
-        if saved_theme not in THEMES:
-            saved_theme = "default"
-        self.var_theme = tk.StringVar(value=saved_theme)
-        for key, meta in THEMES.items():
-            self._radio_row(meta["label"], self.var_theme, key)
 
         self.monitors = list_monitors(app.root)
         saved_mon = resolve_monitor_index(app.settings.get("monitor_index"), app.root)
@@ -123,9 +102,63 @@ class StartupSettingsDialog(tk.Toplevel):
             for i, mon in enumerate(self.monitors):
                 self._radio_row(mon["label"], self.var_monitor, i)
 
+        # Full settings only — keep first-run short.
+        self.var_past = tk.BooleanVar(value=bool(app.settings.get("show_past", True)))
+        self.var_live = tk.BooleanVar(value=bool(app.settings.get("show_live", True)))
+        self.var_future = tk.BooleanVar(value=bool(app.settings.get("show_future", True)))
+        saved_theme = app.settings.get("theme") or "default"
+        if saved_theme not in THEMES:
+            saved_theme = "default"
+        self.var_theme = tk.StringVar(value=saved_theme)
+        self.var_float = tk.BooleanVar(value=bool(app.free_float))
         self.var_skip = tk.BooleanVar(value=bool(app.settings.get("skip_startup_dialog", False)))
-        tk.Frame(self.body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(10, 8))
-        self._check_row("Don't ask next time", self.var_skip, muted=True)
+
+        if not startup:
+            self._section("Match types")
+            for text, var in (
+                ("Past matches (full-time this matchday)", self.var_past),
+                ("Live matches", self.var_live),
+                ("Future matches (still this matchday)", self.var_future),
+            ):
+                self._check_row(text, var)
+
+            self._section("Theme")
+            for key, meta in THEMES.items():
+                self._radio_row(meta["label"], self.var_theme, key)
+
+            self._section("Layout")
+            self._check_row("Detach matches as pills", self.var_float)
+            tk.Label(
+                self.body,
+                text="Ticker hides; drag each match. Right-click a pill to hide it.",
+                bg=PANEL_BG,
+                fg=MUTED,
+                font=FONT_SMALL,
+                wraplength=340,
+                justify="left",
+            ).pack(anchor="w", pady=(0, 4))
+            if app.free_float:
+                GlassButton(
+                    self.body,
+                    "Reset pill layout",
+                    self._reset_layout,
+                    "default",
+                    min_w=140,
+                    icon="rearrange",
+                ).pack(anchor="w", pady=(4, 0))
+
+            self._section("Advanced")
+            GlassButton(
+                self.body,
+                "Test goal toast",
+                self._test_toast,
+                "test",
+                min_w=140,
+                icon="ball",
+            ).pack(anchor="w", pady=(2, 4))
+            self._check_row("Don't ask on startup", self.var_skip, muted=True)
+        else:
+            self._check_row("Don't ask next time", self.var_skip, muted=True)
 
         actions = tk.Frame(self.body, bg=PANEL_BG)
         actions.pack(fill=tk.X, pady=(14, 0))
@@ -247,12 +280,11 @@ class StartupSettingsDialog(tk.Toplevel):
         h = self.body.winfo_reqheight() + pad_y
         self._size = (w, h)
         self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
-        self.bg.configure(image=self._ph)
+        self.bg.configure(image=self._ph, bg=window_fill())
         self.geometry(f"{w}x{h}")
         self.body.place(x=16, y=14)
 
     def _place_center(self):
-        """Own window — center on the chosen display, not glued to the Live dock."""
         self.update_idletasks()
         dw, dh = self._size
         idx = int(self.var_monitor.get())
@@ -264,15 +296,32 @@ class StartupSettingsDialog(tk.Toplevel):
         self.geometry(f"{dw}x{dh}+{x}+{y}")
 
     def _start_move(self, event):
+        self._dragging = True
         self._move_off = (event.x_root - self.winfo_x(), event.y_root - self.winfo_y())
 
     def _do_move(self, event):
+        if not self._dragging:
+            return
         ox, oy = self._move_off
         self.geometry(f"+{event.x_root - ox}+{event.y_root - oy}")
 
+    def _end_move(self, _event=None):
+        self._dragging = False
+
     def destroy(self):
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self._dragging = False
         if getattr(self.app, "_settings_dialog", None) is self:
             self.app._settings_dialog = None
+        # Drop any residual press so dock/ticker do not inherit B1-Motion.
+        try:
+            self.app.end_move()
+            self.app.dock._end_move()
+        except Exception:
+            pass
         super().destroy()
 
     def _league_logo(self, url, size=22):
@@ -294,26 +343,57 @@ class StartupSettingsDialog(tk.Toplevel):
         except Exception:
             return None
 
+    def _reset_layout(self):
+        self.app.rearrange_float_pills()
+
+    def _test_toast(self):
+        self.app.run_test_notification()
+
     def _save(self):
         leagues = [lid for lid, var in self.league_vars.items() if var.get()]
         if not leagues:
             leagues = ["eng.1"]
             self.league_vars["eng.1"].set(True)
-        if not (self.var_past.get() or self.var_live.get() or self.var_future.get()):
-            self.var_live.set(True)
 
         prev_mon = resolve_monitor_index(self.app.settings.get("monitor_index"), self.app.root)
         self.app.settings["leagues"] = leagues
-        self.app.settings["show_past"] = self.var_past.get()
-        self.app.settings["show_live"] = self.var_live.get()
-        self.app.settings["show_future"] = self.var_future.get()
-        self.app.settings["skip_startup_dialog"] = self.var_skip.get()
         self.app.settings["monitor_index"] = int(self.var_monitor.get())
-        self.app.settings["theme"] = self.var_theme.get() if self.var_theme.get() in THEMES else "default"
+        self.app.settings["skip_startup_dialog"] = self.var_skip.get()
         self.app.settings["filters_set"] = True
+
+        if self.startup:
+            # Smart defaults on first run — live + upcoming; past on for FT slate.
+            self.app.settings.setdefault("show_past", True)
+            self.app.settings.setdefault("show_live", True)
+            self.app.settings.setdefault("show_future", True)
+            self.app.settings.setdefault("theme", "default")
+            want_float = False
+        else:
+            if not (self.var_past.get() or self.var_live.get() or self.var_future.get()):
+                self.var_live.set(True)
+            self.app.settings["show_past"] = self.var_past.get()
+            self.app.settings["show_live"] = self.var_live.get()
+            self.app.settings["show_future"] = self.var_future.get()
+            self.app.settings["theme"] = self.var_theme.get() if self.var_theme.get() in THEMES else "default"
+            want_float = bool(self.var_float.get())
+
+        self.app.settings["free_float"] = want_float
         self.app.save_settings()
+        force_mon = prev_mon != int(self.var_monitor.get())
+        app = self.app
         self.destroy()
-        self.app.restyle()
-        self.app.apply_display_layout(force=prev_mon != int(self.var_monitor.get()))
-        self.app._ensure_data_loop()
-        threading.Thread(target=self.app.run_once, daemon=True).start()
+
+        def _after():
+            app.end_move()
+            try:
+                app.dock._end_move()
+            except Exception:
+                pass
+            app.restyle()
+            app.apply_display_layout(force=force_mon)
+            app.apply_free_float(want_float)
+            app._ensure_data_loop()
+            threading.Thread(target=app.run_once, daemon=True).start()
+
+        # Defer until after ButtonRelease so no stray B1-Motion hits the dock/ticker.
+        app.root.after_idle(_after)

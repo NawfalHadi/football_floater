@@ -40,9 +40,8 @@ from .config import (
 from .espn import scoreboard_url, summary_url
 from .matchday import countdown_text, espn_dates, in_matchday, matchday_window, parse_espn_dt
 from .monitors import get_monitor, list_monitors
-from .overlay import clock_color, setup_overlay
+from .overlay import clock_color, setup_overlay, window_fill
 from .theme import (
-    CHROMA,
     DIVIDER,
     MUTED,
     PANEL_BG,
@@ -55,6 +54,7 @@ from .theme import (
     make_circle_icon,
     make_glass,
 )
+from .widgets.coach_tip import CoachTip
 from .widgets.control_dock import ControlDock
 from .widgets.goal_bubble import GoalBubble, TickerToast
 from .widgets.match_pill import MatchPill
@@ -77,12 +77,13 @@ class SmartTicker:
         self.active_alerts = {}
         self.active_bubbles = []
 
-        self.free_float = False
         self.match_pills = {}
         self._hidden_labels = {}
         self.pill_positions, self.hidden_pills = self.load_pill_state()
         self.settings = self.load_settings()
         apply_theme(self.settings.get("theme") or "default")
+        self.free_float = bool(self.settings.get("free_float", False))
+        self.overlay_hidden = False
 
         self.scroll_x = 0
         self.content_width = 0
@@ -92,13 +93,16 @@ class SmartTicker:
         self._clock_labels = []
         self._countdown_ms = 0
         self._move_off = (0, 0)
+        self._dragging = False
 
         self.setup_ticker_window()
         self.timeline = TimelinePanel(self)
         self.dock = ControlDock(self)
         self.apply_display_layout(force=False)
+        if self.free_float:
+            self.set_ticker_visible(False)
 
-        # Every launch: ask leagues/filters/display unless user opted out
+        # Every launch: ask leagues + display unless user opted out
         if self.settings.get("skip_startup_dialog") and self.settings.get("filters_set"):
             threading.Thread(target=self.update_data_loop, daemon=True).start()
         else:
@@ -121,7 +125,7 @@ class SmartTicker:
         defaults = {
             "filters_set": False,
             "skip_startup_dialog": False,
-            "leagues": ["eng.1"],
+            "leagues": list(LEAGUES.keys()),
             "show_past": True,
             "show_live": True,
             "show_future": True,
@@ -130,6 +134,9 @@ class SmartTicker:
             "ticker_pos": None,
             "monitor_index": None,  # None → OS primary at runtime
             "theme": "default",
+            "free_float": False,
+            "seen_coach_toast": False,
+            "seen_coach_pill": False,
         }
         try:
             if SETTINGS_FILE.exists():
@@ -211,9 +218,9 @@ class SmartTicker:
     def setup_ticker_window(self):
         setup_overlay(self.root)
         self.toast_band = TOAST_BAND
-        self.ticker_bg = tk.Label(self.root, bg=CHROMA, bd=0)
+        self.ticker_bg = tk.Label(self.root, bg=window_fill(), bd=0)
         self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
-        self.ticker_bg.configure(image=self._ticker_ph)
+        self.ticker_bg.configure(image=self._ticker_ph, bg=window_fill())
         self.ticker_body = tk.Frame(self.root, bg=PANEL_BG)
         # Glass under chroma toast band — toasts place() above without clipping the bar.
         self._apply_ticker_chrome()
@@ -228,6 +235,7 @@ class SmartTicker:
         for w in (self.ticker_bg, self.clip_frame):
             w.bind("<ButtonPress-1>", self.start_move)
             w.bind("<B1-Motion>", self.do_move)
+            w.bind("<ButtonRelease-1>", self.end_move)
 
         # Temporary place; apply_display_layout() keeps a saved spot that is still on a screen
         mon = get_monitor(self.settings.get("monitor_index"), self.root)
@@ -326,19 +334,63 @@ class SmartTicker:
             self.dock._build()
 
     def start_move(self, event):
+        self._dragging = True
         self._move_off = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
 
     def do_move(self, event):
+        if not self._dragging:
+            return
         ox, oy = self._move_off
         self.root.geometry(f"+{event.x_root - ox}+{event.y_root - oy}")
         self.settings["ticker_pos"] = [self.root.winfo_x(), self.root.winfo_y()]
         self.save_settings()
 
+    def end_move(self, _event=None):
+        self._dragging = False
+
     def set_ticker_visible(self, visible):
-        if visible:
+        if visible and not self.overlay_hidden:
             self.root.deiconify()
         else:
             self.root.withdraw()
+
+    def toggle_overlay_hidden(self):
+        """Hide score surfaces; keep the Live dock so the user can bring them back."""
+        self.overlay_hidden = not self.overlay_hidden
+        if self.overlay_hidden:
+            self.timeline.close()
+            self._clear_bubbles()
+            self.root.withdraw()
+            for pill in self.match_pills.values():
+                try:
+                    pill.withdraw()
+                except tk.TclError:
+                    pass
+        else:
+            if self.free_float:
+                for pill in self.match_pills.values():
+                    try:
+                        pill.deiconify()
+                    except tk.TclError:
+                        pass
+            else:
+                self.root.deiconify()
+        if hasattr(self, "dock"):
+            self.dock.set_hide_button()
+
+    def maybe_coach_toast(self, near=None):
+        if self.settings.get("seen_coach_toast"):
+            return
+        self.settings["seen_coach_toast"] = True
+        self.save_settings()
+        CoachTip(self, "Goal alerts pop up here. They clear on their own.", near=near)
+
+    def maybe_coach_pill(self, near=None):
+        if self.settings.get("seen_coach_pill"):
+            return
+        self.settings["seen_coach_pill"] = True
+        self.save_settings()
+        CoachTip(self, "Drag a pill to place it. Right-click to hide.", near=near)
 
     # ---------- animation ----------
     def animate_ticker(self):
@@ -434,8 +486,17 @@ class SmartTicker:
 
     def sync_bubbles(self):
         if self.free_float:
+            if self.overlay_hidden:
+                for _key, _anchor, bubble, _slot in self.active_bubbles:
+                    try:
+                        bubble.hide()
+                    except tk.TclError:
+                        pass
+                return
             avoid = self._avoid_rects()
             placed = []
+            # Stack toasts above their own pill (slot lifts). Sticky placement stops
+            # crowded screens from jumping tips between neighbors every frame.
             for _key, anchor, bubble, slot in self.active_bubbles:
                 try:
                     if not anchor.winfo_exists():
@@ -446,10 +507,10 @@ class SmartTicker:
                     ah = max(anchor.winfo_height(), PILL_H)
                     bx, by = bubble.place_near(
                         (ax, ay, aw, ah),
-                        lift=slot * (bubble.h + 4),
+                        lift=slot * (bubble.h + 6),
                         bounds=self._bubble_bounds(ax, ay),
                         avoid=avoid + placed,
-                        stick_above=False,
+                        stick_above=True,
                     )
                     placed.append((bx, by, bubble.w, bubble.h))
                 except tk.TclError:
@@ -532,6 +593,8 @@ class SmartTicker:
                 bubble = TickerToast(self.root, **kwargs)
                 self._ensure_toast_band(bubble.h, lift=slot * (bubble.h + 4))
             self.active_bubbles.append([key, anchor, bubble, slot])
+            if alert.get("tag", "GOAL") == "GOAL" and not str(key).startswith(f"{mid}|sub|"):
+                self.maybe_coach_toast(near=bubble if hasattr(bubble, "winfo_rootx") else anchor)
 
     # ---------- free-float ----------
     def _rects_overlap(self, x1, y1, w1, h1, x2, y2, w2, h2, pad=PILL_GAP):
@@ -641,9 +704,12 @@ class SmartTicker:
                 menu.add_command(
                     label=f"Show {self._match_label(mid)}", command=lambda m=mid: self.unhide_match_pill(m)
                 )
-        btn = self.dock.btn_hidden
+        btn = getattr(self.dock, "btn_hidden", None)
         try:
-            menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + 32)
+            if btn is not None:
+                menu.tk_popup(btn.winfo_rootx(), btn.winfo_rooty() + 32)
+            else:
+                menu.tk_popup(self.dock.winfo_rootx(), self.dock.winfo_rooty() + 32)
         finally:
             menu.grab_release()
 
@@ -659,22 +725,32 @@ class SmartTicker:
             pass
         self._settings_dialog = StartupSettingsDialog(self, startup=False)
 
-    def toggle_free_float(self):
+    def apply_free_float(self, enabled):
+        """Set float mode from Settings (idempotent)."""
+        enabled = bool(enabled)
+        if enabled == self.free_float:
+            self.settings["free_float"] = enabled
+            self.save_settings()
+            return
         self.timeline.close()
         self._clear_bubbles()
-        self.free_float = not self.free_float
+        self.free_float = enabled
+        self.settings["free_float"] = enabled
+        self.save_settings()
         self._refresh_alert_ttls_for_mode()
         self.dock.set_free_button()
         if self.free_float:
             self.set_ticker_visible(False)
-            # Recreate toasts on pills for any alert still open from running-text.
             self.sync_free_pills(self.current_matches)
+            self.maybe_coach_pill(near=self.dock)
         else:
             self._capture_live_pill_positions()
             self.destroy_all_pills()
             self.set_ticker_visible(True)
-            # Recreate toasts on ticker chips for any alert still open from float.
             self.render_matches(self.current_matches)
+
+    def toggle_free_float(self):
+        self.apply_free_float(not self.free_float)
 
     def rearrange_float_pills(self):
         """Restack visible float pills from the bottom-right of the chosen display."""
@@ -729,10 +805,18 @@ class SmartTicker:
             else:
                 x, y = self.allocate_pill_pos(mid)
                 self.match_pills[mid] = MatchPill(self, m, x, y)
+                if self.overlay_hidden:
+                    try:
+                        self.match_pills[mid].withdraw()
+                    except tk.TclError:
+                        pass
         self._update_hidden_chip()
         self._clear_bubbles()
         for mid, pill in self.match_pills.items():
             self._add_bubble(mid, pill)
+        if self.match_pills and not self.settings.get("seen_coach_pill"):
+            first = next(iter(self.match_pills.values()))
+            self.maybe_coach_pill(near=first)
 
     # ---------- parsing / fetch ----------
     def get_player_name_from_detail(self, detail):
@@ -1221,6 +1305,7 @@ class SmartTicker:
             "detail": "Someone",
             "expires": time.time() + self._alert_ttl(),
         }
+        self.maybe_coach_toast(near=self.dock)
         if self.free_float:
             self.sync_free_pills(self.current_matches)
         else:

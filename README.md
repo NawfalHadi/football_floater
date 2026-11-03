@@ -1,75 +1,102 @@
 # Football Floater
 
-Desktop **live-score overlay** for football broadcasts. Glass ticker, movable control dock, free-float match pills, multi-monitor aware. Scores come from ESPN (Premier League, Bundesliga, La Liga).
+Desktop **live-score overlay** for football broadcasts. Glass ticker, small Live dock, optional free-float match pills. Scores from ESPN (Premier League, Bundesliga, La Liga, Champions League).
 
-Built for watching a stream: stay on top, chroma-key friendly, out of the way until you need it.
+Built for watching a stream on **Windows**: stay on top, chroma-key friendly, out of the way until you need it. Linux is a best-effort compat build (solid glass panels when transparency is unavailable).
+
+---
+
+## Download (Windows first)
+
+1. On a Windows machine with Python 3.10+:
+
+```powershell
+git clone git@github.com:NawfalHadi/football_floater.git
+cd football_floater
+.\scripts\build_windows.ps1
+```
+
+2. Zip `dist\FootballFloater\` and ship `FootballFloater.exe` (plus the folder next to it) via GitHub Releases.
+
+Optional: Nuitka notes are in [`scripts/build_windows.ps1`](scripts/build_windows.ps1).
+
+Settings live in `%APPDATA%\FootballFloater\` (not beside the `.exe`).
+
+### Linux (compat)
+
+```bash
+./scripts/run_linux.sh
+# self-contained AppImage (bundles Python + Tk) → output/
+./scripts/build_appimage.sh
+./output/FootballFloater-x86_64.AppImage
+```
+
+Build needs `python3-tkinter` (+ `binutils`) on the build machine only; the AppImage bundles Python + Tk + deps (~28MB). Run needs FUSE (`fuse3` / `fusermount3`) on the host — or extract: `./FootballFloater-x86_64.AppImage --appimage-extract`. Solid glass panels on Linux. Prefer X11 if Wayland looks wrong. Config: `~/.config/football-floater/`.
 
 ---
 
 ## Screenshots
 
-Add PNGs under [`docs/screenshots/`](docs/screenshots/). Until then, placeholders below document what each shot should show.
-
 ### 1. Running-text ticker
 
-![Running-text ticker — glass capsule with live scores scrolling](docs/screenshots/01-ticker.png)
+![Running-text ticker — glass capsule with live scores](docs/screenshots/01-ticker.png)
 
-*Glass score capsule over the pitch. Each match shows home/away crests, score, and clock (live minute, `FT`, or `KO in …` countdown). The strip scrolls when there are more matches than fit.*
+Glass score capsule. Crests/abbreviations, score, and clock (live minute, `FT`, or kickoff countdown). Strip scrolls when the slate is long.
 
 ### 2. Control dock
 
-![Live control dock under the ticker](docs/screenshots/02-dock.png)
+![Live control dock](docs/screenshots/02-dock.png)
 
-*Separate movable **Live** dock: Refresh, Test notification, Float, Rearrange, Hidden, Settings, Mini, Quit. Drag it anywhere; position is saved. Mini mode collapses to icons only.*
+Small movable **Live** dock: Refresh, Settings, Hide, Quit. Drag anywhere; position is saved. Extra float-only actions appear only when pills are enabled.
 
 ### 3. Start / Settings
 
-![Glass settings panel for leagues, filters, theme, display](docs/screenshots/03-settings.png)
+![Glass start panel — leagues and display](docs/screenshots/03-settings.png)
 
-*Draggable glass settings (also the startup “what to watch?” panel). Pick leagues, past/live/future filters, theme, and which display owns the overlay. Centered on the chosen monitor — not glued to the dock.*
+First launch asks **leagues + which display**. Filters, theme, and “detach matches as pills” live under Settings afterward.
 
 ### 4. Free-float pills
 
 ![Match pills floating on the broadcast](docs/screenshots/04-float-pills.png)
 
-*Float on: ticker hides; each match becomes a draggable pill. Right-click to hide; **Rearrange** restacks visible pills on the chosen display. Positions persist across restarts.*
+Settings → **Detach matches as pills**. Drag to place; right-click to hide; **Reset layout** / **Show hidden** on the dock.
 
 ### 5. Float goal toast
 
 ![Speech-bubble goal toast pointing at its match pill](docs/screenshots/05-float-toast.png)
 
-*Goal / sub toast beside a pill, with a chat tip aimed at the owner. Placement walks 360° around the pill for an empty, in-bounds slot. Short TTL (~8s) so it does not cover the pitch.*
+Goal / sub toast beside a pill, tip aimed at the owner. Short TTL so it does not cover the pitch.
 
 ### 6. Running-text goal toast
 
-![Goal toast riding above a match chip in the ticker](docs/screenshots/06-ticker-toast.png)
+![Goal toast above a match chip in the ticker](docs/screenshots/06-ticker-toast.png)
 
-*In running-text mode the toast lives in a band above the glass and scrolls with its match chip (~60s). Switching Float ↔ running-text re-homes open alerts and retargets TTL.*
+In ticker mode the toast rides above the glass with its match chip.
 
 ### 7. Match timeline
 
-![Per-match timeline with home events left and away events right](docs/screenshots/07-timeline.png)
+![Per-match timeline](docs/screenshots/07-timeline.png)
 
-*Click a chip or pill for the timeline: score header, live clock or KO countdown, then events. Home on the left of the minute, away on the right. Pre-match empty state stays compact (header only).*
+Click a chip or pill for the timeline: score header, clock, then events (home left / away right of the minute).
 
 ---
 
 ## Features
 
-- **Running-text ticker** — scrolling glass capsule for the matchday slate
-- **Free-float pills** — per-match overlays you can drag, hide, rearrange
-- **Goal / sub toasts** — follow the match (ticker strip or speech tip on pills)
-- **Timeline** — goals, cards, assists, grouped same-minute subs
-- **Matchday window** — local 06:00 → next 06:00 (late kicks stay in)
-- **Filters** — leagues, past / live / future; live-seen FT kept until restart
-- **Themes** — default, experimental (PL × Bundesliga), macOS-style glass
-- **Multi-monitor** — pick display; ticker/dock remember position with off-screen fallback
+- **Running-text ticker** — default view; scrolling glass capsule
+- **Free-float pills** — optional; enable in Settings
+- **Goal / sub toasts** — ticker strip or speech tip on pills
+- **Timeline** — goals, cards, assists
+- **Matchday window** — local 06:00 → next 06:00
+- **Filters / themes** — under Settings (not on first run)
+- **Multi-monitor** — pick display; positions remember with off-screen fallback
+- **One-time tips** — short coach hints the first time you see a toast or pill
 
-Visual tokens and behavior detail: [`DESIGN.md`](DESIGN.md).
+Visual tokens: [`DESIGN.md`](DESIGN.md).
 
 ---
 
-## Run
+## Run from source
 
 ```bash
 pip install -r requirements.txt
@@ -80,44 +107,19 @@ python -m football_floater
 
 | Platform | Notes |
 |---|---|
-| Windows | Tk `transparentcolor` chroma key (`#FF00FF`) |
-| Linux / macOS | Same path when the compositor allows; otherwise solid panels |
+| Windows | Tk `transparentcolor` chroma key (`#FF00FF`) — primary |
+| Linux / macOS | Solid glass panels (no magenta). `FOOTBALL_FLOATER_FORCE_SOLID=1` also forces solid on Windows if needed |
 
 Needs network access to ESPN scoreboards.
 
 ---
 
-## Usage (short)
+## Usage
 
-1. On launch, choose leagues / filters / theme / display (or skip next time).
-2. **Running-text** (Float off): scores scroll in the capsule; click a match for timeline.
-3. **Float on**: pills appear; drag to place; **Rearrange** to restack; **Hidden** to restore.
-4. **Test** fires a fake goal toast on the first match (handy to check placement).
-5. Dock and ticker positions save to `settings.json`; pill spots to `pill_positions.json`.
+1. On launch, pick leagues + display (or skip next time).
+2. Scores scroll in the ticker; click a match for the timeline.
+3. **Settings** for filters, theme, or **Detach matches as pills**.
+4. **Hide** tuck scores away; dock stays so you can **Show** again.
+5. Dock / ticker positions save under the user config dir.
 
----
-
-## Project layout
-
-```
-main.py                     # thin entry
-football_floater/
-  config.py                 # sizes, timing, settings paths
-  theme.py                  # palette, glass / speech-bubble / buttons
-  monitors.py               # multi-display detect
-  matchday.py               # 06:00 local slate + countdown helpers
-  espn.py                   # API URLs
-  overlay.py                # topmost / chroma helpers
-  app.py                    # SmartTicker (data loop + ticker + float)
-  widgets/                  # dock, pills, timeline, settings, toasts
-docs/screenshots/           # README images (see folder README)
-DESIGN.md                   # UI / behavior guide
-```
-
-Settings files sit next to the repo root: `settings.json`, `pill_positions.json`.
-
----
-
-## Remote
-
-`git@github.com:NawfalHadi/football_floater.git`
+Regenerate README shots: `python3 scripts/capture_screenshots.py`

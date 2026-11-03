@@ -13,8 +13,8 @@ from ..config import (
 from ..icons import event_icon
 from ..matchday import countdown_text
 from ..monitors import list_monitors
-from ..overlay import clock_color, setup_overlay
-from ..theme import CHROMA, DIVIDER, MUTED, PANEL_BG, TEXT_COLOR, make_glass
+from ..overlay import clock_color, setup_overlay, window_fill
+from ..theme import DIVIDER, MUTED, PANEL_BG, TEXT_COLOR, make_glass
 from .match_pill import MatchPill
 
 
@@ -42,7 +42,7 @@ class TimelinePanel(tk.Toplevel):
         self._ph = None
         self._icon_refs = []
         self._clock_lbl = None
-        self.bg = tk.Label(self, bg=CHROMA, bd=0)
+        self.bg = tk.Label(self, bg=window_fill(), bd=0)
         self.bg.place(x=0, y=0)
         self.body = tk.Frame(self, bg=PANEL_BG)
         self.bind("<Enter>", self._on_enter)
@@ -109,7 +109,7 @@ class TimelinePanel(tk.Toplevel):
         kind = ev.get("type") or "other"
         icon = None
         if kind in ("goal", "penalty", "yellow", "red"):
-            icon = tk.Label(block, image=self._tk_icon(kind, 16), bg=PANEL_BG, bd=0)
+            icon = tk.Label(block, image=self._tk_icon(kind, 18), bg=PANEL_BG, bd=0)
         self._event_names(names, ev, side)
         if side == "home":
             names.pack(side=tk.LEFT, anchor="n")
@@ -124,7 +124,7 @@ class TimelinePanel(tk.Toplevel):
         block = tk.Frame(parent, bg=PANEL_BG)
         block.pack(anchor="e" if side == "home" else "w")
         names = tk.Frame(block, bg=PANEL_BG)
-        icon = tk.Label(block, image=self._tk_icon("sub", 16), bg=PANEL_BG, bd=0)
+        icon = tk.Label(block, image=self._tk_icon("sub", 18), bg=PANEL_BG, bd=0)
         anchor = "e" if side == "home" else "w"
         for i, ev in enumerate(subs):
             pair = tk.Frame(names, bg=PANEL_BG)
@@ -259,7 +259,7 @@ class TimelinePanel(tk.Toplevel):
         w, h = max(min_w, req_w), req_h
         self._size = (w, h)
         self._ph = ImageTk.PhotoImage(make_glass(w, h, radius=16))
-        self.bg.configure(image=self._ph)
+        self.bg.configure(image=self._ph, bg=window_fill())
         self.geometry(f"{w}x{h}")
         self.body.place(x=16, y=12)
 

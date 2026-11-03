@@ -4,9 +4,8 @@ import tkinter as tk
 from PIL import ImageTk
 
 from ..config import FONT_SMALL, FONT_TINY
-from ..overlay import setup_overlay
+from ..overlay import setup_overlay, window_fill
 from ..theme import (
-    CHROMA,
     CLOCK_LIVE,
     MUTED,
     PANEL_BG,
@@ -18,6 +17,10 @@ from ..theme import (
     speech_outer_size,
 )
 
+# Keep a toast glued once placed — recomputing every frame makes crowded stacks jump.
+_STICK_OWNER_MOVE = 14
+_STICK_MAX_GAP = 96
+
 
 def _rects_hit(a, b, pad=6):
     ax, ay, aw, ah = a
@@ -26,17 +29,20 @@ def _rects_hit(a, b, pad=6):
 
 
 def stick_above_origin(anchor, bubble_w, bubble_h, bounds, lift=0):
-    """Ticker popup: track the scrolling match horizontally. Only pin Y so it stays above the bar."""
-    ax, ay, aw, _ah = anchor
+    """Pin toast above the owner (ticker or pill). Horizontal center on owner."""
+    ax, ay, aw, ah = anchor
     gap = 8
     bx = int(ax + (aw - bubble_w) / 2)
     by = int(ay - gap - bubble_h - lift)
     if bounds:
-        _mx, my, _mw, _mh = bounds
-        if by < my + 4 and my + 4 + bubble_h + gap <= ay:
-            by = my + 4
+        mx, my, mw, mh = bounds
+        bx = max(mx + 4, min(bx, mx + mw - bubble_w - 4))
+        if by < my + 4:
+            # Flip below owner when clipped at top.
+            by = int(ay + max(1, ah) + gap + lift)
+            by = min(by, my + mh - bubble_h - 4)
+        by = max(my + 4, by)
     return bx, by
-
 
 def _tail_toward_pill(bx, by, bw, bh, ax, ay, aw, ah):
     """Tip side from bubble center → pill center (always aims at the owner)."""
@@ -49,8 +55,8 @@ def _tail_toward_pill(bx, by, bw, bh, ax, ay, aw, ah):
 
 
 def _angle_sweep():
-    """Cardinals first (above / below / sides), then fill the circle."""
-    primary = [270, 90, 180, 0, 240, 300, 120, 60, 210, 330, 150, 30]
+    """Above / below first (clear ownership on stacks), then sides, then fill."""
+    primary = [270, 90, 250, 290, 110, 70, 180, 0, 210, 330, 150, 30]
     seen = set(primary)
     out = list(primary)
     for i in range(0, 360, 15):
@@ -70,7 +76,6 @@ def _wedge_penalty(bcx, bcy, ax, ay, aw, ah, others):
     pcx, pcy = ax + aw / 2, ay + ah / 2
     penalty = 0
     for ox, oy, ow, oh in others:
-        # Stacked = strong horizontal overlap with the owner.
         overlap = min(ax + aw, ox + ow) - max(ax, ox)
         if overlap < min(aw, ow) * 0.45:
             continue
@@ -78,28 +83,64 @@ def _wedge_penalty(bcx, bcy, ax, ay, aw, ah, others):
         lo, hi = (pcy, ocy) if pcy < ocy else (ocy, pcy)
         if not (lo + 4 < bcy < hi - 4):
             continue
-        # Beside the stack (not clearly above/below the pair).
         stack_left = min(ax, ox)
         stack_right = max(ax + aw, ox + ow)
         if bcx < stack_left - 4 or bcx > stack_right + 4:
-            penalty += 500
+            penalty += 600
         else:
-            penalty += 200
+            penalty += 250
     return penalty
+
+
+def _clarity_penalty(bcx, bcy, ax, ay, aw, ah, others):
+    """Toast must read as belonging to owner, not a nearer neighbor pill."""
+    pcx, pcy = ax + aw / 2, ay + ah / 2
+    d_owner = math.hypot(bcx - pcx, bcy - pcy)
+    penalty = 0
+    for ox, oy, ow, oh in others:
+        ocx, ocy = ox + ow / 2, oy + oh / 2
+        d_other = math.hypot(bcx - ocx, bcy - ocy)
+        if d_other + 12 < d_owner:
+            penalty += 900
+        elif d_other < d_owner + 24:
+            penalty += 280
+        # Extra: sitting on top of another pill's bounding box
+        if ox - 4 <= bcx <= ox + ow + 4 and oy - 4 <= bcy <= oy + oh + 4:
+            penalty += 500
+    return penalty
+
+
+def _placement_valid(bx, by, bw, bh, anchor, bounds, avoid, others):
+    ax, ay, aw, ah = anchor
+    if bounds:
+        mx, my, mw, mh = bounds
+        if bx < mx + 2 or by < my + 2 or bx + bw > mx + mw - 2 or by + bh > my + mh - 2:
+            return False
+    rect = (bx, by, bw, bh)
+    blockers = list(avoid) + [(ax, ay, aw, ah)]
+    if any(_rects_hit(rect, other, pad=4) for other in blockers):
+        return False
+    bcx, bcy = bx + bw / 2, by + bh / 2
+    pcx, pcy = ax + aw / 2, ay + ah / 2
+    if math.hypot(bcx - pcx, bcy - pcy) > _STICK_MAX_GAP + max(bw, bh) / 2:
+        return False
+    if _clarity_penalty(bcx, bcy, ax, ay, aw, ah, others) >= 900:
+        return False
+    return True
 
 
 def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
     """
-    Pick an empty in-bounds slot around the pill (full circle).
-    Returns (x, y, tail) — top-left of the speech bitmap, and which side the tip uses.
-    Tip always aims at the owner from final geometry (not the search angle).
+    Pick an empty in-bounds slot around the pill.
+    Prefers above/below so tips stay readable when many pills stack.
+    Returns (x, y, tail).
     """
     ax, ay, aw, ah = anchor
     if bounds:
         mx, my, mw, mh = bounds
     else:
         mx, my, mw, mh = ax - 4000, ay - 4000, 8000, 8000
-    gap = 6
+    gap = 8
     cx, cy = ax + aw / 2, ay + ah / 2
     others = [r for r in avoid if r != (ax, ay, aw, ah)]
     blockers = list(avoid) + [(ax, ay, aw, ah)]
@@ -107,13 +148,11 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
     def fits(x, y, bw, bh):
         if x < mx + 4 or y < my + 4 or x + bw > mx + mw - 4 or y + bh > my + mh - 4:
             return False
-        rect = (x, y, bw, bh)
-        return not any(_rects_hit(rect, other) for other in blockers)
+        return not any(_rects_hit((x, y, bw, bh), other) for other in blockers)
 
     best = None
-    for ring in (0, 12, 24, 40):
+    for ring in (0, 10, 22, 36, 52, 72):
         for deg in _angle_sweep():
-            # Provisional size from search angle; refine tip from real geometry.
             prov_tail = "bottom"
             d = deg % 360
             if 45 <= d < 135:
@@ -142,10 +181,12 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
                 if not fits(bx2, by2, bw2, bh2):
                     continue
                 bx, by, bw, bh = bx2, by2, bw2, bh2
+            angle_bias = 0 if deg in (270, 90) else 12 if deg in (250, 290, 110, 70) else 28 if deg in (180, 0) else 45
             score = (
                 dist
+                + angle_bias
                 + _wedge_penalty(bx + bw / 2, by + bh / 2, ax, ay, aw, ah, others)
-                + (0 if deg in (270, 90) else 15 if deg in (180, 0) else 30)
+                + _clarity_penalty(bx + bw / 2, by + bh / 2, ax, ay, aw, ah, others)
             )
             cand = (score, bx, by, tail)
             if best is None or cand < best:
@@ -158,7 +199,7 @@ def choose_bubble_origin(anchor, body_w, body_h, bounds, avoid, lift=0):
     # Last resort: above owner, tip down.
     bw, bh = speech_outer_size(body_w, body_h, "bottom")
     bx = int(cx - bw / 2)
-    by = int(ay - gap - bh)
+    by = int(ay - gap - bh - lift)
     bx = max(mx + 4, min(bx, mx + mw - bw - 4))
     by = max(my + 4, min(by, my + mh - bh - 4))
     return bx, by, _tail_toward_pill(bx, by, bw, bh, ax, ay, aw, ah)
@@ -201,9 +242,10 @@ class TickerToast(tk.Frame):
     """
 
     def __init__(self, master, text, tag="GOAL", detail="", lines=None):
-        super().__init__(master, bg=CHROMA, bd=0)
+        fill = window_fill()
+        super().__init__(master, bg=fill, bd=0)
         self.visible = True
-        bg = tk.Label(self, bg=CHROMA, bd=0)
+        bg = tk.Label(self, bg=fill, bd=0)
         bg.place(x=0, y=0)
         body = tk.Frame(self, bg=PANEL_BG)
         _fill_toast_body(body, text, tag, detail or "", lines)
@@ -211,7 +253,7 @@ class TickerToast(tk.Frame):
         w = body.winfo_reqwidth() + 32
         h = max(32, body.winfo_reqheight() + 16)
         self._ph = ImageTk.PhotoImage(make_glass(w, h))
-        bg.configure(image=self._ph)
+        bg.configure(image=self._ph, bg=fill)
         body.place(x=16, y=(h - body.winfo_reqheight()) // 2)
         self.w = w
         self.h = h
@@ -221,7 +263,6 @@ class TickerToast(tk.Frame):
     def update_position(self, x, y, lift=0, gap=8):
         """x = left edge in root; y = top of glass bar. Never draw into the glass."""
         bx = int(x)
-        # Bottom of toast at y - gap. Caller must grow the toast band if by would go < 0.
         by = int(y - self.h - gap - lift)
         if by < 0:
             by = 0
@@ -247,7 +288,7 @@ class GoalBubble(tk.Toplevel):
         setup_overlay(self, 0.96)
         self.visible = True
         self._tail = "bottom"
-        self._bg = tk.Label(self, bg=CHROMA, bd=0)
+        self._bg = tk.Label(self, bg=window_fill(), bd=0)
         self._bg.place(x=0, y=0)
         self._body = tk.Frame(self, bg=PANEL_BG)
         _fill_toast_body(self._body, text, tag, detail or "", lines)
@@ -256,6 +297,8 @@ class GoalBubble(tk.Toplevel):
         self.body_h = max(32, self._body.winfo_reqheight() + 16)
         self._body_req_h = self._body.winfo_reqheight()
         self._ph = None
+        self._placed = None
+        self._anchor_at_place = None
         self._apply_tail("bottom")
         self.geometry(f"{self.w}x{self.h}+-2000+-2000")
 
@@ -274,18 +317,52 @@ class GoalBubble(tk.Toplevel):
             self.deiconify()
             self.visible = True
             self._placed = None
+            self._anchor_at_place = None
+
+        ax, ay, aw, ah = anchor
+        others = [r for r in avoid if r != (ax, ay, aw, ah)]
+
+        # Sticky: keep last good slot unless owner moved a lot or slot went bad.
+        prev = self._placed
+        prev_anchor = self._anchor_at_place
+        if prev and not stick_above:
+            pbx, pby, ptail = prev
+            bw, bh = speech_outer_size(self.body_w, self.body_h, ptail)
+            owner_moved = True
+            if prev_anchor is not None:
+                owner_moved = abs(prev_anchor[0] - ax) + abs(prev_anchor[1] - ay) >= _STICK_OWNER_MOVE
+            if not owner_moved and _placement_valid(pbx, pby, bw, bh, anchor, bounds, avoid, others):
+                if ptail != self._tail:
+                    self._apply_tail(ptail)
+                self.geometry(f"{self.w}x{self.h}+{pbx}+{pby}")
+                try:
+                    self.lift()
+                except tk.TclError:
+                    pass
+                return pbx, pby
+
         if stick_above:
-            bx, by = stick_above_origin(anchor, self.body_w, self.body_h, bounds, lift=lift)
-            tail = "bottom"
+            # Outer size with tip down; may flip below inside stick_above_origin.
+            bw, bh = speech_outer_size(self.body_w, self.body_h, "bottom")
+            bx, by = stick_above_origin(anchor, bw, bh, bounds, lift=lift)
+            # If that overlaps neighbors, fall back to full search.
+            if _placement_valid(bx, by, bw, bh, anchor, bounds, avoid, others):
+                tail = _tail_toward_pill(bx, by, bw, bh, ax, ay, aw, ah)
+            else:
+                bx, by, tail = choose_bubble_origin(
+                    anchor, self.body_w, self.body_h, bounds, avoid, lift=lift
+                )
         else:
             bx, by, tail = choose_bubble_origin(
                 anchor, self.body_w, self.body_h, bounds, avoid, lift=lift
             )
-        if (bx, by, tail) == getattr(self, "_placed", None):
+
+        if (bx, by, tail) == prev:
             return bx, by
         if tail != self._tail:
             self._apply_tail(tail)
         self._placed = (bx, by, tail)
+        self._anchor_at_place = (ax, ay, aw, ah)
         self.geometry(f"{self.w}x{self.h}+{bx}+{by}")
         try:
             self.lift()
@@ -297,4 +374,5 @@ class GoalBubble(tk.Toplevel):
         if self.visible:
             self.withdraw()
             self.visible = False
-
+            self._placed = None
+            self._anchor_at_place = None

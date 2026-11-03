@@ -15,7 +15,14 @@ class GlassButton(tk.Label):
         self.set(label, kind)
         self.bind("<Enter>", lambda e: self.configure(image=self._hover))
         self.bind("<Leave>", lambda e: self.configure(image=self._normal))
-        self.bind("<Button-1>", lambda e: self.command())
+        # Release — not press. Press+destroy (Settings Start/Save) leaves B1-Motion
+        # on the widget under the cursor with a stale drag offset → windows jump.
+        self.bind("<ButtonRelease-1>", self._on_click)
+
+    def _on_click(self, _event=None):
+        if self.command:
+            self.command()
+        return "break"
 
     def set(self, label, kind="default", icon=None):
         if icon is not None:

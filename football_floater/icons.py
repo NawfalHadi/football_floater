@@ -19,74 +19,97 @@ def _blank(size):
     return Image.new("RGB", (size, size), _hex_rgb(PANEL_BG))
 
 
+def _soccer_ball(d, x0, y0, x1, y1, fill, rim, stitch):
+    """Simple ball: filled circle + center pentagon hint + seam arcs."""
+    d.ellipse((x0, y0, x1, y1), fill=fill, outline=rim, width=1)
+    cx = (x0 + x1) / 2
+    cy = (y0 + y1) / 2
+    r = min(x1 - x0, y1 - y0) / 2
+    # center patch
+    pr = max(2, r * 0.28)
+    d.polygon(
+        [
+            (cx, cy - pr),
+            (cx + pr * 0.95, cy - pr * 0.3),
+            (cx + pr * 0.6, cy + pr * 0.8),
+            (cx - pr * 0.6, cy + pr * 0.8),
+            (cx - pr * 0.95, cy - pr * 0.3),
+        ],
+        fill=stitch,
+    )
+    # light seams
+    d.arc((x0 + 1, y0 + 1, x1 - 1, y1 - 1), start=20, end=100, fill=stitch, width=1)
+    d.arc((x0 + 1, y0 + 1, x1 - 1, y1 - 1), start=200, end=280, fill=stitch, width=1)
+
+
 @lru_cache(maxsize=64)
 def event_icon(kind: str, size: int = 14) -> Image.Image:
-    """kind: goal | penalty | assist | yellow | red → RGB image for ImageTk."""
+    """kind: goal | penalty | assist | yellow | red | sub → RGB image for ImageTk."""
     img = _blank(size)
     d = ImageDraw.Draw(img)
     m = max(1, size // 8)
     kind = (kind or "").lower()
+    white = _hex_rgb(TEXT_COLOR)
+    green = _hex_rgb(PL_GREEN)
+    muted = _hex_rgb(MUTED)
+    panel = _hex_rgb(PANEL_BG)
 
     if kind == "goal":
-        d.ellipse(
-            (m, m, size - 1 - m, size - 1 - m),
-            fill=_hex_rgb(TEXT_COLOR),
-            outline=_hex_rgb(PL_GREEN),
-            width=1,
-        )
-        cx = cy = size // 2
-        d.ellipse((cx - 1, cy - 1, cx + 1, cy + 1), fill=_hex_rgb(PANEL_BG))
+        _soccer_ball(d, m, m, size - 1 - m, size - 1 - m, white, green, panel)
     elif kind == "penalty":
-        d.ellipse(
-            (m, m, size - 1 - m, size - 1 - m),
-            fill=_hex_rgb(TEXT_COLOR),
-            outline=_hex_rgb(PL_GREEN),
-            width=1,
-        )
-        f = _font(max(7, size - 5))
-        bx0, by0 = size - m - 7, size - m - 7
-        d.rectangle((bx0, by0, size - 1 - m, size - 1 - m), fill=_hex_rgb(PL_GREEN))
-        d.text((bx0 + 1, by0 - 1), "P", fill=_hex_rgb(PANEL_BG), font=f)
+        _soccer_ball(d, m, m, size - 1 - m, size - 1 - m, white, green, panel)
+        # green corner badge with P
+        bs = max(6, size // 2)
+        bx0, by0 = size - m - bs, size - m - bs
+        d.rounded_rectangle((bx0, by0, size - 1 - m, size - 1 - m), radius=2, fill=green)
+        f = _font(max(7, bs - 2))
+        d.text((bx0 + 1, by0 - 1), "P", fill=panel, font=f)
     elif kind == "assist":
-        # pass arrow
-        d.polygon(
-            [(m, size // 2), (size // 2 + 1, m + 1), (size // 2 + 1, size - 2 - m)],
-            fill=_hex_rgb(MUTED),
-        )
-        d.line((size // 2, size // 2, size - 1 - m, size // 2), fill=_hex_rgb(PL_GREEN), width=2)
+        # chevron pass →
+        y = size // 2
+        d.line((m + 1, y, size - 4 - m, y), fill=green, width=max(2, size // 8))
         d.polygon(
             [
-                (size - 1 - m, size // 2),
-                (size - 4 - m, size // 2 - 3),
-                (size - 4 - m, size // 2 + 3),
+                (size - 1 - m, y),
+                (size - 5 - m, y - 4),
+                (size - 5 - m, y + 4),
             ],
-            fill=_hex_rgb(PL_GREEN),
+            fill=green,
         )
+        d.ellipse((m, y - 2, m + 4, y + 2), fill=white)
     elif kind == "sub":
-        # up arrow (on) and down arrow (off), readable at 16px
-        cx = size // 2
-        d.polygon([(cx, m), (cx - 3, m + 5), (cx + 3, m + 5)], fill=_hex_rgb(TEXT_COLOR))
+        # green ↑ on / red ↓ off side by side — reads at 16–18px
+        mid = size // 2
+        # on (left)
+        d.polygon([(mid - 4, m + 1), (mid - 7, m + 6), (mid - 1, m + 6)], fill=green)
+        d.rectangle((mid - 5, m + 5, mid - 3, size - 2 - m), fill=green)
+        # off (right)
         d.polygon(
-            [(cx, size - 1 - m), (cx - 3, size - 6 - m), (cx + 3, size - 6 - m)],
-            fill=_hex_rgb(MUTED),
+            [(mid + 4, size - 2 - m), (mid + 1, size - 7 - m), (mid + 7, size - 7 - m)],
+            fill=_hex_rgb(DANGER),
         )
-        d.line((cx, m + 4, cx, size - 5 - m), fill=_hex_rgb(TEXT_COLOR), width=1)
+        d.rectangle((mid + 3, m + 1, mid + 5, size - 7 - m), fill=_hex_rgb(DANGER))
     elif kind == "yellow":
+        # portrait card
+        pad = m + 1
         d.rounded_rectangle(
-            (m + 1, m, size - 2 - m, size - 1 - m),
+            (pad + 1, m, size - 2 - pad, size - 1 - m),
             radius=2,
             fill=_hex_rgb(CARD_YELLOW),
-            outline=_hex_rgb(TEXT_COLOR),
+            outline=white,
             width=1,
         )
+        d.line((pad + 3, m + 3, size - 4 - pad, m + 3), fill=panel, width=1)
     elif kind == "red":
+        pad = m + 1
         d.rounded_rectangle(
-            (m + 1, m, size - 2 - m, size - 1 - m),
+            (pad + 1, m, size - 2 - pad, size - 1 - m),
             radius=2,
             fill=_hex_rgb(DANGER),
-            outline=_hex_rgb(TEXT_COLOR),
+            outline=white,
             width=1,
         )
+        d.line((pad + 3, m + 3, size - 4 - pad, m + 3), fill=panel, width=1)
     else:
-        d.ellipse((m, m, size - 1 - m, size - 1 - m), outline=_hex_rgb(MUTED), width=1)
+        d.ellipse((m, m, size - 1 - m, size - 1 - m), outline=muted, width=1)
     return img

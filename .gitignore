@@ -3,13 +3,17 @@ __pycache__/
 *.egg-info/
 .eggs/
 dist/
+dist-nuitka/
 build/
+output/
+*.AppImage
 .venv/
+
 venv/
 .env
 .DS_Store
 
-# local runtime state
+# local runtime state (legacy repo-root copies; real files live in user config)
 settings.json
 pill_positions.json
 
