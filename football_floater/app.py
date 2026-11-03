@@ -38,7 +38,14 @@ from .config import (
     TOAST_GAP,
 )
 from .espn import scoreboard_url, summary_url
-from .matchday import countdown_text, espn_dates, in_matchday, matchday_window, parse_espn_dt
+from .matchday import (
+    COUNTDOWN_WIDTH,
+    countdown_text,
+    espn_dates,
+    in_matchday,
+    matchday_window,
+    parse_espn_dt,
+)
 from .monitors import get_monitor, list_monitors
 from .overlay import clock_color, setup_overlay, window_fill
 from .theme import (
@@ -53,6 +60,7 @@ from .theme import (
     apply_theme,
     make_circle_icon,
     make_glass,
+    solid_mode,
 )
 from .widgets.coach_tip import CoachTip
 from .widgets.control_dock import ControlDock
@@ -192,12 +200,38 @@ class SmartTicker:
             pass
 
     # ---------- ticker window ----------
+    def _default_toast_band(self):
+        """
+        Windows chroma: reserve empty punched-out band (invisible).
+        Linux solid: no idle band — a PANEL_BG strip would look like a dead rectangle.
+        """
+        return 0 if solid_mode() else TOAST_BAND
+
     def _ticker_root_h(self):
         return TICKER_H + self.toast_band
 
+    def _set_toast_band(self, band):
+        """Resize toast band; keep glass at the same screen Y so the bar does not jump."""
+        band = max(0, int(band))
+        old = getattr(self, "toast_band", 0)
+        if band == old:
+            self._apply_ticker_chrome()
+            return
+        try:
+            x, y = self.root.winfo_x(), self.root.winfo_y()
+            # glass_screen_y = root_y + old_band → new_root_y + band = same
+            new_y = y + old - band
+            self.toast_band = band
+            self.root.geometry(f"{TICKER_W}x{TICKER_H + band}+{x}+{new_y}")
+            self._apply_ticker_chrome()
+            self.settings["ticker_pos"] = [x, new_y]
+        except tk.TclError:
+            self.toast_band = band
+            self._apply_ticker_chrome()
+
     def _apply_ticker_chrome(self):
         """Place glass under the toast band. Band grows if a tall toast would collide."""
-        band = getattr(self, "toast_band", TOAST_BAND)
+        band = getattr(self, "toast_band", self._default_toast_band())
         try:
             if getattr(self, "ticker_bg", None) is not None:
                 self.ticker_bg.place(x=0, y=band, width=TICKER_W, height=TICKER_H)
@@ -212,12 +246,21 @@ class SmartTicker:
         need = int(toast_h + TOAST_GAP + lift + 2)
         if need <= self.toast_band:
             return
-        self.toast_band = need
-        self._apply_ticker_chrome()
+        self._set_toast_band(need)
+
+    def _shrink_toast_band_if_idle(self):
+        """Drop solid-mode empty band when no in-ticker toasts remain."""
+        if not solid_mode():
+            return
+        if any(not isinstance(b[2], GoalBubble) for b in self.active_bubbles):
+            return
+        idle = self._default_toast_band()
+        if self.toast_band != idle:
+            self._set_toast_band(idle)
 
     def setup_ticker_window(self):
         setup_overlay(self.root)
-        self.toast_band = TOAST_BAND
+        self.toast_band = self._default_toast_band()
         self.ticker_bg = tk.Label(self.root, bg=window_fill(), bd=0)
         self._ticker_ph = ImageTk.PhotoImage(make_glass(TICKER_W, TICKER_H))
         self.ticker_bg.configure(image=self._ticker_ph, bg=window_fill())
@@ -444,6 +487,7 @@ class SmartTicker:
                 except tk.TclError:
                     pass
         self.active_bubbles = kept
+        self._shrink_toast_band_if_idle()
 
     def tick_countdowns(self):
         self._countdown_ms += ANIMATION_SPEED
@@ -558,6 +602,7 @@ class SmartTicker:
             except tk.TclError:
                 pass
         self.active_bubbles = []
+        self._shrink_toast_band_if_idle()
 
     def _bubble_bounds(self, x, y):
         for mon in list_monitors(self.root):
@@ -1214,12 +1259,25 @@ class SmartTicker:
                     clock_text = m["time"]
                     if m.get("state") == "pre":
                         clock_text = countdown_text(m.get("kickoff")) or m["time"]
+                    # Fixed char width so KO countdown ticks do not reflow the chip.
                     clock = tk.Label(
-                        mid_box, text=clock_text, bg=PANEL_BG, fg=clock_color(clock_text), font=FONT_SMALL
+                        mid_box,
+                        text=clock_text,
+                        bg=PANEL_BG,
+                        fg=clock_color(clock_text),
+                        font=FONT_SMALL,
+                        width=COUNTDOWN_WIDTH,
+                        anchor="center",
                     )
                     clock.pack()
                     league = tk.Label(
-                        mid_box, text=m.get("league_short", ""), bg=PANEL_BG, fg=MUTED, font=FONT_TINY
+                        mid_box,
+                        text=m.get("league_short", ""),
+                        bg=PANEL_BG,
+                        fg=MUTED,
+                        font=FONT_TINY,
+                        width=COUNTDOWN_WIDTH,
+                        anchor="center",
                     )
                     league.pack()
                     parts += [mid_box, score, clock, league]

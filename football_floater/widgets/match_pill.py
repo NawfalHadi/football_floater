@@ -3,7 +3,7 @@ import tkinter as tk
 from PIL import ImageTk
 
 from ..config import DRAG_THRESHOLD, FONT_SCORE, FONT_SMALL, FONT_TINY, PILL_H, PILL_ICON, PILL_W
-from ..matchday import countdown_text
+from ..matchday import COUNTDOWN_WIDTH, countdown_text
 from ..overlay import clock_color, setup_overlay, window_fill
 from ..theme import MUTED, PANEL_BG, PL_PURPLE, TEXT_COLOR, make_glass
 
@@ -31,7 +31,9 @@ class MatchPill(tk.Toplevel):
         self.mid.pack(side=tk.LEFT, expand=True)
         self.lbl_score = tk.Label(self.mid, bg=PANEL_BG, fg=TEXT_COLOR, font=FONT_SCORE)
         self.lbl_score.pack()
-        self.lbl_clock = tk.Label(self.mid, bg=PANEL_BG, font=FONT_SMALL)
+        self.lbl_clock = tk.Label(
+            self.mid, bg=PANEL_BG, font=FONT_SMALL, width=COUNTDOWN_WIDTH, anchor="center"
+        )
         self.lbl_clock.pack()
         self.lbl_league = tk.Label(self.mid, bg=PANEL_BG, fg=MUTED, font=FONT_TINY)
         self.lbl_league.pack()

@@ -43,6 +43,10 @@ def in_matchday(kickoff, window=None):
     return to_local(start) <= kickoff < to_local(end)
 
 
+# Always HH:MM:SS so ticker chips do not grow/shrink every second.
+COUNTDOWN_WIDTH = len("KO in 00:00:00")
+
+
 def countdown_text(kickoff, now=None):
     """Time until kickoff. Prefixed so it is not read as a live match clock."""
     if kickoff is None:
@@ -54,9 +58,9 @@ def countdown_text(kickoff, now=None):
         remaining = 0
     hours, rem = divmod(remaining, 3600)
     minutes, seconds = divmod(rem, 60)
-    if hours:
-        return f"KO in {hours}:{minutes:02d}:{seconds:02d}"
-    return f"KO in {minutes}:{seconds:02d}"
+    # Cap display hours at 99 so width stays COUNTDOWN_WIDTH.
+    hours = min(hours, 99)
+    return f"KO in {hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def espn_dates(start, end):
