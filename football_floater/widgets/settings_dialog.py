@@ -169,6 +169,11 @@ class StartupSettingsDialog(tk.Toplevel):
             GlassButton(test_row, "Test SUB", lambda: self._test_toast("SUB"), "test", min_w=88).pack(
                 side=tk.LEFT, padx=(6, 0)
             )
+            test_row2 = tk.Frame(self.body, bg=PANEL_BG)
+            test_row2.pack(fill=tk.X, pady=(2, 4))
+            GlassButton(
+                test_row2, "Dummy match", self._spawn_dummy, "test", min_w=120
+            ).pack(side=tk.LEFT)
             self._check_row("Don't ask on startup", self.var_skip, muted=True)
         else:
             self._check_row("Don't ask next time", self.var_skip, muted=True)
@@ -397,6 +402,9 @@ class StartupSettingsDialog(tk.Toplevel):
 
     def _test_toast(self, kind="GOAL"):
         self.app.run_test_notification(kind)
+
+    def _spawn_dummy(self):
+        self.app.spawn_dummy_match()
 
     def _apply(self):
         self._commit(close=False)

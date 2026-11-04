@@ -15,7 +15,8 @@ from .config import (
     ALERT_DURATION,
     ANIMATION_SPEED,
     DRAG_THRESHOLD,
-    FLOAT_ALERT_DURATION,
+    FLOAT_ALERT_GOAL_S,
+    FLOAT_ALERT_SUB_S,
     FONT_SCORE,
     FONT_SMALL,
     FONT_TINY,
@@ -469,9 +470,13 @@ class SmartTicker:
         self.timeline.sync_follow()
         self.root.after(ANIMATION_SPEED, self.animate_ticker)
 
-    def _alert_ttl(self):
-        """Ticker toasts stay longer; float toasts clear faster so they do not cover the pitch."""
-        return FLOAT_ALERT_DURATION if self.free_float else ALERT_DURATION
+    def _alert_ttl(self, tag="GOAL", line_count=1):
+        """Ticker toasts stay longer; float pills: goal 10s, each sub slide 5s."""
+        if not self.free_float:
+            return ALERT_DURATION
+        if (tag or "GOAL").upper() == "SUB":
+            return FLOAT_ALERT_SUB_S * max(1, int(line_count)) + 3
+        return FLOAT_ALERT_GOAL_S + 2
 
     def _refresh_alert_ttls_for_mode(self):
         """
@@ -482,10 +487,12 @@ class SmartTicker:
         if not self.active_alerts:
             return
         now = time.time()
-        ttl = self._alert_ttl()
         for alert in self.active_alerts.values():
             if now >= alert["expires"]:
                 continue
+            tag = alert.get("tag") or "GOAL"
+            lines = len(alert.get("lines") or []) or 1
+            ttl = self._alert_ttl(tag, lines)
             if self.free_float:
                 alert["expires"] = min(alert["expires"], now + ttl)
             else:
@@ -651,9 +658,11 @@ class SmartTicker:
     def allocate_pill_pos(self, mid):
         mid = str(mid)
         mon = self.selected_monitor()
-        left, top = mon["x"] + PILL_MARGIN, mon["y"] + PILL_MARGIN
-        right = mon["x"] + mon["w"] - PILL_MARGIN
-        bottom = mon["y"] + mon["h"] - PILL_MARGIN - 40
+        # Workarea (wx/wy/ww/wh) = taskbar-free rect. Snug bottom-right above panel.
+        left = mon.get("wx", mon["x"]) + PILL_MARGIN
+        top = mon.get("wy", mon["y"]) + PILL_MARGIN
+        right = mon.get("wx", mon["x"]) + mon.get("ww", mon["w"]) - PILL_MARGIN
+        bottom = mon.get("wy", mon["y"]) + mon.get("wh", mon["h"]) - PILL_MARGIN
 
         if mid in self.pill_positions:
             x, y = self.pill_positions[mid]
@@ -753,21 +762,35 @@ class SmartTicker:
         except tk.TclError:
             pass
 
+    def run_context_menu_action(self, fn):
+        """Run a menu command after Tk finishes unpost — sync destroy cancels the callback."""
+        self.root.after_idle(lambda: (self.dismiss_context_menu(), fn()))
+
     def popup_context_menu(self, menu, x_root, y_root):
         """Show a Menu that closes on outside click / Escape / unmap."""
         self.dismiss_context_menu()
         self._ctx_menu = menu
         menu_path = str(menu)
 
+        def _pointer_on_menu(event):
+            try:
+                if str(event.widget).startswith(menu_path):
+                    return True
+            except Exception:
+                pass
+            # Wayland/Cosmic: click widget path often is NOT the Menu — use bbox.
+            try:
+                mx, my = menu.winfo_rootx(), menu.winfo_rooty()
+                mw, mh = max(1, menu.winfo_width()), max(1, menu.winfo_height())
+                return mx <= event.x_root <= mx + mw and my <= event.y_root <= my + mh
+            except tk.TclError:
+                return False
+
         def _outside(event):
             if self._ctx_menu is None:
                 return
-            # Ignore presses on the menu window itself (item select).
-            try:
-                if str(event.widget).startswith(menu_path):
-                    return
-            except Exception:
-                pass
+            if _pointer_on_menu(event):
+                return
             self.dismiss_context_menu()
 
         def _escape(_event=None):
@@ -786,7 +809,8 @@ class SmartTicker:
                 self.root.bind_all(seq, handler, add="+")
                 self._ctx_binds.append((seq, handler))
 
-        menu.bind("<Unmap>", lambda _e: self.dismiss_context_menu(), add="+")
+        # Menu unposts BEFORE invoking the entry command. Sync destroy here ate "Hide".
+        menu.bind("<Unmap>", lambda _e: self.root.after_idle(self.dismiss_context_menu), add="+")
         try:
             menu.tk_popup(int(x_root), int(y_root))
         except tk.TclError:
@@ -799,11 +823,15 @@ class SmartTicker:
         if not self.hidden_pills:
             menu.add_command(label="No hidden matches", state="disabled")
         else:
-            menu.add_command(label="Show all", command=self.unhide_all_pills)
+            menu.add_command(
+                label="Show all",
+                command=lambda: self.run_context_menu_action(self.unhide_all_pills),
+            )
             menu.add_separator()
             for mid in sorted(self.hidden_pills, key=self._match_label):
                 menu.add_command(
-                    label=f"Show {self._match_label(mid)}", command=lambda m=mid: self.unhide_match_pill(m)
+                    label=f"Show {self._match_label(mid)}",
+                    command=lambda m=mid: self.run_context_menu_action(lambda: self.unhide_match_pill(m)),
                 )
         btn = getattr(self.dock, "btn_hidden", None)
         try:
@@ -896,6 +924,9 @@ class SmartTicker:
                 self.match_pills.pop(mid).destroy()
             except tk.TclError:
                 pass
+        # Drop stale coords so dead matches don't block the bottom-right slots.
+        for mid in [k for k in self.pill_positions if k not in live_ids and k not in self.hidden_pills]:
+            self.pill_positions.pop(mid, None)
         # Build new pills withdrawn, then map together — avoids 1-by-1 pop-in.
         fresh = []
         for m in matches:
@@ -910,11 +941,14 @@ class SmartTicker:
                 pill = MatchPill(self, m, x, y)
                 pill.withdraw()
                 self.match_pills[mid] = pill
-                fresh.append(pill)
+                fresh.append((pill, x, y))
         if not self.overlay_hidden:
-            for pill in fresh:
+            for pill, x, y in fresh:
                 try:
                     pill.deiconify()
+                    # Cosmic/Wayland: withdraw→deiconify drops geometry — re-pin after map.
+                    pill.move_to(x, y)
+                    self.root.after_idle(lambda p=pill, px=x, py=y: p.move_to(px, py))
                     # Re-measure mid after map — create-time place used withdrawn sizes.
                     if pill._layout == "idle":
                         pill._place_goal_host(0)
@@ -1167,18 +1201,19 @@ class SmartTicker:
                 {"on": s["on"], "off": s.get("off") or "", "side": s.get("side")}
             )
         now = time.time()
-        ttl = self._alert_ttl()
         for clock in clocks:
             alert_key = f"{m['id']}|sub|{clock}"
             existing = self.active_alerts.get(alert_key)
             if existing and now < existing["expires"]:
                 existing["lines"].extend(fresh_by_clock[clock])
+                ttl = self._alert_ttl("SUB", len(existing["lines"]))
                 existing["expires"] = now + ttl
             else:
+                lines = fresh_by_clock[clock]
                 self.active_alerts[alert_key] = {
                     "text": clock,
-                    "lines": fresh_by_clock[clock],
-                    "expires": now + ttl,
+                    "lines": lines,
+                    "expires": now + self._alert_ttl("SUB", len(lines)),
                     "tag": "SUB",
                 }
 
@@ -1272,7 +1307,7 @@ class SmartTicker:
                     self.active_alerts[mid] = {
                         "text": headline or ("PEN!" if tag == "PEN" else "GOAL!"),
                         "detail": assist,
-                        "expires": time.time() + self._alert_ttl(),
+                        "expires": time.time() + self._alert_ttl(tag),
                         "tag": tag,
                         "side": side,
                     }
@@ -1463,36 +1498,64 @@ class SmartTicker:
         self.dock.set_refresh("Refreshing…", "busy")
         threading.Thread(target=self.run_once, daemon=True).start()
 
+    def _make_dummy_match(self, *, long_names=False):
+        now = datetime.now(ZoneInfo("UTC"))
+        leagues = self.selected_leagues() or list(LEAGUES.keys())
+        lid = leagues[0]
+        n = getattr(self, "_dummy_seq", 0) + 1
+        self._dummy_seq = n
+        home_tla, away_tla = ("AAA", "BBB") if long_names else ("DMY", "TST")
+        return {
+            "id": f"dummy:{n}:{int(time.time())}",
+            "espn_id": f"dummy-{n}",
+            "league_id": lid,
+            "league_short": LEAGUES.get(lid, {}).get("short", "TST"),
+            "league_name": LEAGUES.get(lid, {}).get("name", "Test"),
+            "time": "67'",
+            "state": "in",
+            "kickoff": now,
+            "home": {"tla": home_tla, "logo": "", "score": 1},
+            "away": {"tla": away_tla, "logo": "", "score": 0},
+            "history_list": [],
+            "last_event": "",
+        }
+
+    def spawn_dummy_match(self):
+        """Settings test: one float pill with a fake live match (no ESPN)."""
+        if not self.free_float:
+            self.apply_free_float(True)
+        m = self._make_dummy_match(long_names=True)
+        self.current_matches = list(self.current_matches or []) + [m]
+        self.last_scores[m["id"]] = f"{m['home']['score']}-{m['away']['score']}"
+        self.sync_free_pills(self.current_matches)
+        self._update_hidden_chip()
+
     def run_test_notification(self, kind="GOAL"):
         """Fire one alert kind on every visible match (in-pill pulse when floating)."""
         kind = (kind or "GOAL").upper()
         if kind not in ("GOAL", "PEN", "SUB"):
             kind = "GOAL"
         if not self.current_matches:
-            now = datetime.now(ZoneInfo("UTC"))
-            lid = self.selected_leagues()[0]
-            self.current_matches = [
-                {
-                    "id": f"{lid}:999",
-                    "espn_id": "999",
-                    "league_id": lid,
-                    "league_short": LEAGUES[lid]["short"],
-                    "league_name": LEAGUES[lid]["name"],
-                    "time": "88'",
-                    "state": "in",
-                    "kickoff": now,
-                    "home": {"tla": "TES", "logo": "", "score": 2},
-                    "away": {"tla": "DSG", "logo": "", "score": 1},
-                    "history_list": [],
-                    "last_event": "",
-                }
-            ]
-        expires = time.time() + max(self._alert_ttl(), 12)
-        # Sample names so pill copy is readable while testing.
-        scorers = ("Saka", "Haaland", "Palmer", "Salah", "Isak", "Foden")
+            self.current_matches = [self._make_dummy_match()]
+        # Sample names — include long ones so sub expand can be tested.
+        scorers = ("Saka", "Haaland", "Alexander-Arnold", "Salah", "Isak", "Foden")
         assisters = ("Ødegaard", "De Bruyne", "Saka", "Szoboszlai", "Gordon", "Bernardo")
-        on_bench = ("Nunes", "Eze", "Garnacho", "Rogers", "Mudryk", "Mainoo")
-        off_pitch = ("Grealish", "Sterling", "Antony", "McGinn", "Chilwell", "Casemiro")
+        on_bench = (
+            "Alexander-Arnold",
+            "Christopher Nkunku",
+            "Garnacho",
+            "Morgan Rogers",
+            "Mudryk",
+            "Mainoo",
+        )
+        off_pitch = (
+            "Grealish",
+            "Raheem Sterling",
+            "Antony",
+            "John McGinn",
+            "Chilwell",
+            "Casemiro",
+        )
         for i, m in enumerate(self.current_matches):
             mid = m["id"]
             minute = f"{67 + (i % 20)}'"
@@ -1502,34 +1565,34 @@ class SmartTicker:
                 if str(key).startswith(f"{mid}|sub|"):
                     del self.active_alerts[key]
             if kind == "SUB":
-                sides = ("home", "away", "home")
+                lines = [
+                    {
+                        "on": on_bench[i % len(on_bench)],
+                        "off": off_pitch[i % len(off_pitch)],
+                        "side": "home",
+                    },
+                    {
+                        "on": on_bench[(i + 1) % len(on_bench)],
+                        "off": off_pitch[(i + 1) % len(off_pitch)],
+                        "side": "away",
+                    },
+                    {
+                        "on": on_bench[(i + 2) % len(on_bench)],
+                        "off": off_pitch[(i + 2) % len(off_pitch)],
+                        "side": "home",
+                    },
+                ]
                 self.active_alerts[f"{mid}|sub|test"] = {
                     "text": minute,
-                    "lines": [
-                        {
-                            "on": on_bench[i % len(on_bench)],
-                            "off": off_pitch[i % len(off_pitch)],
-                            "side": sides[0],
-                        },
-                        {
-                            "on": on_bench[(i + 1) % len(on_bench)],
-                            "off": off_pitch[(i + 1) % len(off_pitch)],
-                            "side": sides[1],
-                        },
-                        {
-                            "on": on_bench[(i + 2) % len(on_bench)],
-                            "off": off_pitch[(i + 2) % len(off_pitch)],
-                            "side": sides[2],
-                        },
-                    ],
-                    "expires": expires,
+                    "lines": lines,
+                    "expires": time.time() + self._alert_ttl("SUB", len(lines)),
                     "tag": "SUB",
                 }
             else:
                 self.active_alerts[mid] = {
                     "text": f"{scorers[i % len(scorers)]} {minute}",
                     "detail": "" if kind == "PEN" else assisters[i % len(assisters)],
-                    "expires": expires,
+                    "expires": time.time() + self._alert_ttl(kind),
                     "tag": kind,
                     "side": "home" if i % 2 == 0 else "away",
                 }

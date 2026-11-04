@@ -1,23 +1,41 @@
-"""Free-float per-match pill — in-pill wipe alerts; geometry stays fixed."""
+"""Free-float per-match pill — in-pill wipe alerts; width can grow for long sub names."""
 import time
 import tkinter as tk
 from PIL import ImageTk
 
-from ..config import DRAG_THRESHOLD, FONT_SCORE, FONT_SMALL, FONT_TINY, PILL_H, PILL_ICON, PILL_W
+from ..config import (
+    DRAG_THRESHOLD,
+    FLOAT_ALERT_GOAL_S,
+    FLOAT_ALERT_SUB_S,
+    FONT_SCORE,
+    FONT_SMALL,
+    FONT_TINY,
+    PILL_H,
+    PILL_ICON,
+    PILL_W,
+)
 from ..icons import event_icon
 from ..matchday import COUNTDOWN_WIDTH, countdown_text
 from ..overlay import clock_color, setup_overlay, window_fill
-from ..theme import DANGER, MUTED, PANEL_BG, PL_GREEN, PL_PURPLE, TEXT_COLOR, make_glass
+from ..theme import DANGER, MUTED, PANEL_BG, PANEL_RIM, PL_GREEN, PL_PINK, PL_PURPLE, TEXT_COLOR, make_glass
 
 _TICK_MS = 32
-_SLIDE_HOLD_MS = 2200
+_GOAL_HOLD_MS = int(FLOAT_ALERT_GOAL_S * 1000)
+_SUB_HOLD_MS = int(FLOAT_ALERT_SUB_S * 1000)
+_EXPAND_MS = 300
+_SHRINK_MS = 260
+_SCALE_IN_MS = 340
 _GOAL_WIPE_MS = 380
-_SUB_ROW_MS = 320
-_SUB_STAGGER_MS = 140
 _WIPE_OUT_MS = 280
-_WIPE_PX = 40
+_WIPE_PX = 36
 _SLOT_W = PILL_ICON + 4
 _SLOT_SUB_W = PILL_ICON + 20  # crest + ↑↓ beside it
+_PILL_PAD_X = 14
+_MAX_PILL_W = 320
+# Goal/pen rim blink — slow, few pulses, then steady (not a strobe).
+_BLINK_PERIOD_MS = 780
+_BLINK_COUNT = 3
+_BLINK_ON_FRAC = 0.58
 
 
 def _ease_out_cubic(t: float) -> float:
@@ -47,13 +65,6 @@ def _split_scorer(text: str) -> tuple[str, str]:
     if len(parts) == 2 and "'" in parts[1]:
         return parts[0].strip() or "?", parts[1].strip()
     return text, ""
-
-
-def _clip(s: str, n: int) -> str:
-    s = (s or "").strip()
-    if len(s) <= n:
-        return s
-    return s[: max(1, n - 1)] + "…"
 
 
 def _expand_slides(alerts: list) -> list:
@@ -102,16 +113,14 @@ def _expand_slides(alerts: list) -> list:
 
 
 def _goal_slide_copy(slide: dict) -> tuple[str, str]:
-    """Scorer + minute on top; assist name only underneath (no 'a ' prefix)."""
+    """Scorer on top (minute lives in side slot like subs); assist or GOAL/PEN under."""
     tag = slide.get("tag") or "GOAL"
-    player = _clip(slide.get("player") or "?", 12)
-    clock = (slide.get("clock") or "").strip()
-    assist = _clip(slide.get("extra") or "", 14)
-    head = f"{player} {clock}".strip() if clock else player
+    player = (slide.get("player") or "?").strip()
+    assist = (slide.get("extra") or "").strip()
     if assist:
-        return head, assist
+        return player, assist
     label = "PEN" if tag in ("PEN", "PENALTY") else "GOAL"
-    return head, label
+    return player, label
 
 
 class MatchPill(tk.Toplevel):
@@ -134,6 +143,16 @@ class MatchPill(tk.Toplevel):
         self._phase = "idle"
         self._phase_t0 = 0.0
         self._hold_until = 0.0
+        self._pill_w = PILL_W
+        self._width_from = PILL_W
+        self._width_to = PILL_W
+        self._anchor_left = int(x)
+        self._anchor_right = int(x) + PILL_W
+        self._grow_dir = "right"  # "right" = left edge fixed; "left" = right edge fixed
+        self._alert_rim = None
+        self._blink_t0 = 0.0
+        self._blink_rim_drawn = None
+        self._after_out = "idle"  # "idle" | "next" | "shrink"
 
         # Shared idle glass from app (one draw); alert rims still make a local copy.
         self._ph = app.pill_glass_image()
@@ -141,7 +160,7 @@ class MatchPill(tk.Toplevel):
         self.bg.place(x=0, y=0, relwidth=1, relheight=1)
 
         self.body = tk.Frame(self, bg=PANEL_BG)
-        self.body.place(x=14, y=8, width=PILL_W - 28, height=PILL_H - 16)
+        self.body.place(x=_PILL_PAD_X, y=8, width=PILL_W - 2 * _PILL_PAD_X, height=PILL_H - 16)
 
         # Fixed slots: left crest/arrows/time · mid content · right crest/arrows/time
         self.slot_l = tk.Frame(self.body, bg=PANEL_BG, width=_SLOT_W)
@@ -222,7 +241,10 @@ class MatchPill(tk.Toplevel):
             w.bind("<ButtonRelease-1>", self._on_release)
             w.bind("<Button-3>", self._on_menu)
 
-        self.geometry(f"{PILL_W}x{PILL_H}+{int(x)}+{int(y)}")
+        self._pos = (int(x), int(y))
+        self.geometry(f"{self._pill_w}x{PILL_H}+{self._pos[0]}+{self._pos[1]}")
+        # Some WMs (Cosmic/Wayland) ignore pre-map geometry — re-apply on Map.
+        self.bind("<Map>", self._on_map)
         self._layout = "idle"
         self._goal_mid_placed = False
         self._pack_idle_mid()
@@ -234,6 +256,166 @@ class MatchPill(tk.Toplevel):
     @property
     def match_id(self):
         return str(self.match["id"])
+
+    def move_to(self, x, y):
+        self._pos = (int(x), int(y))
+        self._anchor_left = self._pos[0]
+        self._anchor_right = self._pos[0] + self._pill_w
+        try:
+            self.geometry(f"{self._pill_w}x{PILL_H}+{self._pos[0]}+{self._pos[1]}")
+        except tk.TclError:
+            pass
+
+    def _on_map(self, _event=None):
+        self.move_to(*self._pos)
+
+    def _set_pill_width(self, width, *, rim=None, remake=True):
+        """Resize pill; keep the anchored edge fixed (grow left or right)."""
+        width = int(max(PILL_W, min(_MAX_PILL_W, width)))
+        y = self._pos[1]
+        if self._grow_dir == "left":
+            x = int(self._anchor_right - width)
+        else:
+            x = int(self._anchor_left)
+        self._pill_w = width
+        self._pos = (x, y)
+        try:
+            self.body.place_configure(width=width - 2 * _PILL_PAD_X)
+        except tk.TclError:
+            pass
+        if remake:
+            use_rim = rim if rim is not None else self._alert_rim
+            try:
+                self._ph = ImageTk.PhotoImage(make_glass(width, PILL_H, rim=use_rim or PANEL_RIM))
+                self.bg.configure(image=self._ph)
+            except Exception:
+                pass
+        try:
+            self.geometry(f"{width}x{PILL_H}+{x}+{y}")
+        except tk.TclError:
+            pass
+
+    def _pick_grow_dir(self):
+        try:
+            mon = self.app.selected_monitor()
+            cx = self._pos[0] + self._pill_w / 2
+            mid = mon["x"] + mon.get("ww", mon["w"]) / 2
+        except Exception:
+            mid = 960
+            cx = self._pos[0] + self._pill_w / 2
+        # Left of screen → expand right (left edge fixed). Right → expand left.
+        self._grow_dir = "right" if cx < mid else "left"
+        self._anchor_left = self._pos[0]
+        self._anchor_right = self._pos[0] + self._pill_w
+
+    def _max_pill_w(self):
+        try:
+            mon = self.app.selected_monitor()
+            return min(_MAX_PILL_W, int(mon.get("ww", mon["w"]) * 0.45))
+        except Exception:
+            return _MAX_PILL_W
+
+    def _width_for_mid(self, text_w, left_slot, right_slot):
+        need = 2 * _PILL_PAD_X + left_slot + right_slot + max(48, int(text_w)) + 12
+        return int(max(PILL_W, min(self._max_pill_w(), need)))
+
+    def _measure_sub_width(self, on_name, off_name):
+        """Pill width so both sub names fit without clipping into crests."""
+        on_name = (on_name or "?").strip()
+        off_name = (off_name or "—").strip()
+        try:
+            self.lbl_sub_on.configure(text=on_name)
+            self.lbl_sub_off.configure(text=off_name)
+            self.lbl_sub_on.update_idletasks()
+            self.lbl_sub_off.update_idletasks()
+            text_w = max(self.lbl_sub_on.winfo_reqwidth(), self.lbl_sub_off.winfo_reqwidth(), 48)
+        except tk.TclError:
+            text_w = max(len(on_name), len(off_name), 8) * 7
+        side = self._event_side
+        left_slot = _SLOT_SUB_W if side != "away" else _SLOT_W
+        right_slot = _SLOT_SUB_W if side == "away" else _SLOT_W
+        return self._width_for_mid(text_w, left_slot, right_slot)
+
+    def _measure_goal_width(self):
+        """Pill width so scorer + assist fit (same expand idea as subs)."""
+        try:
+            self.lbl_clock.update_idletasks()
+            self.row_alert.update_idletasks()
+            self.lbl_league.update_idletasks()
+            self.lbl_icon.update_idletasks()
+            text_w = max(
+                self.lbl_clock.winfo_reqwidth(),
+                self.row_alert.winfo_reqwidth(),
+                self.lbl_league.winfo_reqwidth() + self.lbl_icon.winfo_reqwidth() + 4,
+                48,
+            )
+        except tk.TclError:
+            head = ""
+            try:
+                head = self.lbl_clock.cget("text") or ""
+            except tk.TclError:
+                pass
+            text_w = max(len(head) * 7, 48)
+        # Goal keeps both side slots at _SLOT_W (one crest, one blank).
+        return self._width_for_mid(text_w, _SLOT_W, _SLOT_W)
+
+    def _place_alert_scaled(self, scale=1.0, x_off=0.0):
+        if self._layout == "sub":
+            self._place_sub_host(x_off=x_off, scale=scale)
+        else:
+            self._place_goal_host(x_off=x_off, scale=scale)
+
+    def _begin_width_then_scale(self, target_w):
+        """Shared expand → scale-in gate for goal/pen/sub."""
+        self._pick_grow_dir()
+        self._width_from = self._pill_w
+        self._width_to = target_w
+        if abs(target_w - self._pill_w) > 2:
+            self._phase = "expand"
+            self._place_alert_scaled(scale=0.82)
+        else:
+            self._phase = "scale_in"
+            self._place_alert_scaled(x_off=_WIPE_PX, scale=0.82)
+
+    def _set_alert_chrome(self, tag):
+        tag = (tag or "GOAL").upper()
+        if tag == "SUB":
+            self._alert_rim = PL_GREEN
+            self._blink_t0 = 0.0
+        elif tag in ("PEN", "PENALTY"):
+            self._alert_rim = PL_PINK
+            self._blink_t0 = time.time()
+        else:
+            self._alert_rim = PL_GREEN
+            self._blink_t0 = time.time()
+        self._blink_rim_drawn = None
+        self._set_pill_width(self._pill_w, rim=self._alert_rim, remake=True)
+
+    def _clear_alert_chrome(self):
+        self._alert_rim = None
+        self._blink_t0 = 0.0
+        self._blink_rim_drawn = None
+        try:
+            self._ph = self.app.pill_glass_image()
+            self.bg.configure(image=self._ph)
+        except Exception:
+            pass
+
+    def _tick_goal_blink(self):
+        """Soft rim blink for goal/pen only — 3 slow pulses, then solid accent."""
+        if self._layout != "goal" or not self._alert_rim or not self._blink_t0:
+            return
+        elapsed = (time.time() - self._blink_t0) * 1000.0
+        total = _BLINK_PERIOD_MS * _BLINK_COUNT
+        if elapsed >= total:
+            want = self._alert_rim
+        else:
+            cycle = elapsed % _BLINK_PERIOD_MS
+            want = self._alert_rim if cycle < _BLINK_PERIOD_MS * _BLINK_ON_FRAC else PANEL_RIM
+        if want == self._blink_rim_drawn:
+            return
+        self._blink_rim_drawn = want
+        self._set_pill_width(self._pill_w, rim=want, remake=True)
 
     def update_match(self, match):
         self.match = match
@@ -297,8 +479,7 @@ class MatchPill(tk.Toplevel):
 
     def _apply_event_slots(self, side, kind):
         """
-        GOAL: keep scoring crest, blank opposite.
-        SUB: crest stays; ↑↓ sit beside it; minute on opposite side.
+        GOAL/PEN/SUB: crest on event side, minute on the opposite side (subs also get ↑↓).
         """
         self._event_side = side if side in ("home", "away") else None
         self._clear_slot(self.slot_l)
@@ -307,11 +488,12 @@ class MatchPill(tk.Toplevel):
         slide = self._current_slide()
         if slide:
             clock = slide.get("clock") or ""
+        clock_txt = clock or "—"
 
         if kind == "sub":
             if side == "away":
                 self._set_slot_width(_SLOT_W, _SLOT_SUB_W)
-                self.lbl_time_l.configure(text=clock or "—")
+                self.lbl_time_l.configure(text=clock_txt)
                 self.lbl_time_l.pack(expand=True)
                 self.lbl_away.pack(side=tk.LEFT, padx=(0, 1))
                 self._paint_crest("away", self.lbl_away)
@@ -322,18 +504,23 @@ class MatchPill(tk.Toplevel):
                 self.lbl_home.pack(side=tk.LEFT, padx=(0, 1))
                 self._paint_crest("home", self.lbl_home)
                 self.arrows_l.pack(side=tk.LEFT)
-                self.lbl_time_r.configure(text=clock or "—")
+                self.lbl_time_r.configure(text=clock_txt)
                 self.lbl_time_r.pack(expand=True)
             return
 
-        # goal / pen
+        # goal / pen — same minute placement as subs, crest only (no arrows)
         self._set_slot_width(_SLOT_W, _SLOT_W)
         if side == "away":
+            self.lbl_time_l.configure(text=clock_txt)
+            self.lbl_time_l.pack(expand=True)
             self.lbl_away.pack(expand=True)
             self._paint_crest("away", self.lbl_away)
-        elif side == "home":
+        else:
+            # home or unknown → crest left, minute right
             self.lbl_home.pack(expand=True)
             self._paint_crest("home", self.lbl_home)
+            self.lbl_time_r.configure(text=clock_txt)
+            self.lbl_time_r.pack(expand=True)
 
     def refresh_countdown(self):
         if self._layout != "idle" or self.match.get("state") != "pre":
@@ -428,38 +615,45 @@ class MatchPill(tk.Toplevel):
         # Place after host is mapped; _place_goal_host recenters each tick.
         self._goal_mid_placed = True
 
-    def _place_goal_host(self, x_off: float):
+    def _place_goal_host(self, x_off: float = 0, scale: float = 1.0):
         w, h = self._clip_size()
         self.sub_host.place_forget()
-        self.goal_host.place(x=int(x_off), y=0, width=w, height=h)
+        scale = max(0.72, min(1.0, scale))
+        sw, sh = max(1, int(w * scale)), max(1, int(h * scale))
+        ox = (w - sw) // 2 + int(x_off)
+        oy = (h - sh) // 2
+        self.goal_host.place(x=ox, y=oy, width=sw, height=sh)
         if getattr(self, "_goal_mid_placed", False) and self._layout == "goal":
-            # Vertically center the two-line goal block in the mid band.
             self.lbl_clock.place(relx=0.5, rely=0.38, anchor="center")
             self.row_alert.place(relx=0.5, rely=0.68, anchor="center")
 
-    def _place_sub_host(self, y_off: float = 0, x_off: float = 0):
+    def _place_sub_host(self, y_off: float = 0, x_off: float = 0, scale: float = 1.0):
         w, h = self._clip_size()
         self.goal_host.place_forget()
-        self.sub_host.place(x=int(x_off), y=0, width=w, height=h)
-        # Center the two name lines in mid.
+        scale = max(0.72, min(1.0, scale))
+        sw, sh = max(1, int(w * scale)), max(1, int(h * scale))
+        ox = (w - sw) // 2 + int(x_off)
+        oy = (h - sh) // 2
+        self.sub_host.place(x=ox, y=oy, width=sw, height=sh)
         self.lbl_sub_on.place(relx=0.5, rely=0.32, anchor="center")
         self.lbl_sub_off.place(relx=0.5, rely=0.68, anchor="center")
-        # Horizontal wipe via shifting labels' x through place in tick — use x_off on host.
-        if x_off:
-            self.sub_host.place(x=int(x_off), y=0, width=w, height=h)
 
     def _show_idle(self):
         self._layout = "idle"
         self._phase = "idle"
         self._event_side = None
         self._goal_mid_placed = False
+        self._after_out = "idle"
+        if self._pill_w != PILL_W:
+            self._grow_dir = "right" if self._grow_dir == "right" else "left"
+            # Snap anchors to current edges before shrink-to-idle.
+            self._anchor_left = self._pos[0]
+            self._anchor_right = self._pos[0] + self._pill_w
+            self._set_pill_width(PILL_W, rim=PANEL_RIM, remake=False)
+        self._clear_alert_chrome()
         self._show_slot_crests()
         self._pack_idle_mid()
-        ph = self.app.pill_glass_image()
-        if self._ph is not ph:
-            self._ph = ph
-            self.bg.configure(image=self._ph)
-        self._place_goal_host(0)
+        self._place_goal_host(0, scale=1.0)
         self._paint_idle_mid()
 
     def _paint_idle_mid(self):
@@ -484,9 +678,8 @@ class MatchPill(tk.Toplevel):
             pass
 
     def _current_slide(self):
-        if not self._slides:
+        if not self._slides or self._slide_i < 0 or self._slide_i >= len(self._slides):
             return None
-        self._slide_i %= len(self._slides)
         return self._slides[self._slide_i]
 
     def _fill_goal_copy(self, slide):
@@ -503,8 +696,14 @@ class MatchPill(tk.Toplevel):
         self.lbl_league.configure(text=sub, fg=MUTED)
 
     def _fill_sub_copy(self, slide):
-        self.lbl_sub_on.configure(text=_clip(slide.get("player") or "?", 16), fg=PL_GREEN)
-        self.lbl_sub_off.configure(text=_clip(slide.get("extra") or "—", 16), fg=DANGER)
+        on = (slide.get("player") or "?").strip()
+        off = (slide.get("extra") or "—").strip()
+        self.lbl_sub_on.configure(text=on, fg=PL_GREEN)
+        self.lbl_sub_off.configure(text=off, fg=DANGER)
+
+    def _hold_ms_for(self, slide) -> int:
+        tag = ((slide or {}).get("tag") or "GOAL").upper()
+        return _SUB_HOLD_MS if tag == "SUB" else _GOAL_HOLD_MS
 
     def _start_slide(self):
         slide = self._current_slide()
@@ -514,38 +713,51 @@ class MatchPill(tk.Toplevel):
         self._phase_t0 = time.time()
         tag = (slide.get("tag") or "GOAL").upper()
         side = slide.get("side")
+        self._set_alert_chrome(tag)
         if tag == "SUB":
             self._layout = "sub"
-            self._phase = "sub_in"
             self._apply_event_slots(side, "sub")
             self._fill_sub_copy(slide)
-            self._place_sub_host(x_off=_WIPE_PX)
+            self._begin_width_then_scale(
+                self._measure_sub_width(slide.get("player"), slide.get("extra"))
+            )
         else:
             self._layout = "goal"
-            self._phase = "goal_wipe"
             self._apply_event_slots(side, "goal")
             self._fill_goal_copy(slide)
-            self._place_goal_host(_WIPE_PX)
+            # Same expand logic as subs — long scorers were clipping into the crest.
+            self._begin_width_then_scale(self._measure_goal_width())
 
     def _advance_or_leave(self):
+        """After hold: wipe out, then next slide or shrink/idle — no micro-loop."""
         now = time.time()
         self._slides = [s for s in _expand_slides(self._alerts) if now < s.get("expires", 0)]
-        if not self._slides:
-            self._phase = "out"
-            self._phase_t0 = now
-            return
-        if len(self._slides) == 1:
-            self._hold_until = now + 0.35
-            return
         self._phase = "out"
         self._phase_t0 = now
+        if self._slide_i + 1 < len(self._slides):
+            self._after_out = "next"
+        elif self._pill_w > PILL_W + 2:
+            self._after_out = "shrink"
+        else:
+            self._after_out = "idle"
 
     def _next_slide_enter(self):
-        if not self._slides:
-            self._show_idle()
+        self._slide_i += 1
+        if self._slide_i >= len(self._slides):
+            if self._pill_w > PILL_W + 2:
+                self._begin_shrink()
+            else:
+                self._show_idle()
             return
-        self._slide_i = (self._slide_i + 1) % len(self._slides)
         self._start_slide()
+
+    def _begin_shrink(self):
+        self._pick_grow_dir()
+        self._width_from = self._pill_w
+        self._width_to = PILL_W
+        self._phase = "shrink"
+        self._phase_t0 = time.time()
+        self._ensure_loop()
 
     def _ensure_loop(self):
         if self._job is not None:
@@ -564,53 +776,75 @@ class MatchPill(tk.Toplevel):
         self._job = None
         now = time.time()
         self._alerts = [a for a in self._alerts if now < a.get("expires", 0)]
-        self._slides = [s for s in _expand_slides(self._alerts) if now < s.get("expires", 0)]
-        if not self._slides and self._phase == "idle":
-            self._show_idle()
-            return
-        if not self._slides and self._phase != "out":
+        live_slides = [s for s in _expand_slides(self._alerts) if now < s.get("expires", 0)]
+        # Keep index stable while animating; drop only when leaving a slide.
+        if self._phase in ("idle",):
+            self._slides = live_slides
+        elif not live_slides and self._phase not in ("out", "shrink"):
+            self._slides = []
             self._phase = "out"
+            self._after_out = "shrink" if self._pill_w > PILL_W + 2 else "idle"
             self._phase_t0 = now
 
         elapsed = (now - self._phase_t0) * 1000.0
-        slide = self._current_slide()
-        tag = (slide.get("tag") if slide else "") or ""
-        is_sub = tag.upper() == "SUB"
+        slide = self._current_slide() if self._slides else None
 
-        if self._phase == "goal_wipe":
-            t = _ease_out_cubic(elapsed / _GOAL_WIPE_MS)
-            self._place_goal_host(_WIPE_PX * (1 - t))
-            if elapsed >= _GOAL_WIPE_MS:
-                self._place_goal_host(0)
-                self._phase = "hold"
-                self._hold_until = now + _SLIDE_HOLD_MS / 1000.0
+        if self._phase == "expand":
+            t = _ease_out_cubic(elapsed / _EXPAND_MS)
+            w = self._width_from + (self._width_to - self._width_from) * t
+            remake = int(elapsed / _TICK_MS) % 2 == 0
+            if remake:
+                self._blink_rim_drawn = None  # width remake — let blink re-apply rim
+            self._set_pill_width(w, remake=remake)
+            self._place_alert_scaled(scale=0.82)
+            self._tick_goal_blink()
+            if elapsed >= _EXPAND_MS:
+                self._blink_rim_drawn = None
+                self._set_pill_width(self._width_to, remake=True)
+                self._phase = "scale_in"
                 self._phase_t0 = now
-        elif self._phase == "sub_in":
-            t = _ease_out_cubic(elapsed / (_SUB_ROW_MS + _SUB_STAGGER_MS))
-            self._place_sub_host(x_off=_WIPE_PX * (1 - t))
-            if elapsed >= _SUB_ROW_MS + _SUB_STAGGER_MS:
-                self._place_sub_host(x_off=0)
+                self._place_alert_scaled(x_off=_WIPE_PX, scale=0.82)
+                self._tick_goal_blink()
+        elif self._phase == "scale_in":
+            t = _ease_out_cubic(elapsed / _SCALE_IN_MS)
+            scale = 0.82 + 0.18 * t
+            x_off = _WIPE_PX * (1 - t)
+            self._place_alert_scaled(x_off=x_off, scale=scale)
+            self._tick_goal_blink()
+            if elapsed >= _SCALE_IN_MS:
+                self._place_alert_scaled(scale=1.0)
                 self._phase = "hold"
-                self._hold_until = now + _SLIDE_HOLD_MS / 1000.0
+                self._hold_until = now + self._hold_ms_for(slide) / 1000.0
                 self._phase_t0 = now
         elif self._phase == "hold":
-            if is_sub:
-                self._place_sub_host(x_off=0)
-            else:
-                self._place_goal_host(0)
+            self._place_alert_scaled(scale=1.0)
+            self._tick_goal_blink()
             if now >= self._hold_until:
                 self._advance_or_leave()
         elif self._phase == "out":
             t = _ease_in_cubic(elapsed / _WIPE_OUT_MS)
-            if is_sub or self._layout == "sub":
-                self._place_sub_host(x_off=-_WIPE_PX * t)
-            else:
-                self._place_goal_host(-_WIPE_PX * t)
+            scale = 1.0 - 0.12 * t
+            x_off = -_WIPE_PX * t
+            self._place_alert_scaled(x_off=x_off, scale=scale)
             if elapsed >= _WIPE_OUT_MS:
-                if not self._slides:
+                self._slides = live_slides
+                if self._after_out == "next":
+                    self._next_slide_enter()
+                elif self._after_out == "shrink" or self._pill_w > PILL_W + 2:
+                    self._begin_shrink()
+                else:
                     self._show_idle()
                     return
-                self._next_slide_enter()
+        elif self._phase == "shrink":
+            t = _ease_in_cubic(elapsed / _SHRINK_MS)
+            w = self._width_from + (self._width_to - self._width_from) * t
+            self._set_pill_width(w, remake=(int(elapsed / _TICK_MS) % 2 == 0))
+            if elapsed >= _SHRINK_MS:
+                self._set_pill_width(PILL_W, remake=False)
+                self._show_idle()
+                return
+        elif self._phase == "idle":
+            return
 
         self._ensure_loop()
 
@@ -626,12 +860,13 @@ class MatchPill(tk.Toplevel):
         if not self._dragging and abs(dx) + abs(dy) < DRAG_THRESHOLD:
             return
         self._dragging = True
-        self.geometry(f"+{ox + dx}+{oy + dy}")
+        self.move_to(ox + dx, oy + dy)
         self.app.timeline.sync_follow()
 
     def _on_release(self, event):
         if self._dragging:
-            self.app.pill_positions[self.match_id] = (self.winfo_x(), self.winfo_y())
+            self._pos = (self.winfo_x(), self.winfo_y())
+            self.app.pill_positions[self.match_id] = self._pos
             self.app.save_pill_state()
         else:
             self.app.timeline.toggle(self.match, self, prefer_above_ticker=False)
@@ -640,13 +875,17 @@ class MatchPill(tk.Toplevel):
 
     def _on_menu(self, event):
         menu = tk.Menu(self, tearoff=0, bg=PANEL_BG, fg=TEXT_COLOR, activebackground=PL_PURPLE)
+        mid = self.match_id
+        match = self.match
         menu.add_command(
             label="Show timeline",
-            command=lambda: (self.app.dismiss_context_menu(), self.app.timeline.open(self.match, self)),
+            command=lambda: self.app.run_context_menu_action(
+                lambda: self.app.timeline.open(match, self)
+            ),
         )
         menu.add_command(
             label="Hide this match",
-            command=lambda: (self.app.dismiss_context_menu(), self.app.hide_match_pill(self.match_id)),
+            command=lambda: self.app.run_context_menu_action(lambda: self.app.hide_match_pill(mid)),
         )
         self.app.popup_context_menu(menu, event.x_root, event.y_root)
 
