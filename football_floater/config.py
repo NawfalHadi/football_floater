@@ -20,6 +20,11 @@ LEAGUES = {
         "short": "LL",
         "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/esp.1.png",
     },
+    "ita.1": {
+        "name": "Serie A",
+        "short": "SA",
+        "logo": "https://a.espncdn.com/i/leaguelogos/soccer/500/ita.1.png",
+    },
     "uefa.champions": {
         "name": "UEFA Champions League",
         "short": "UCL",
@@ -34,7 +39,7 @@ FLOAT_ALERT_DURATION = 10  # free-float in-pill goal default (legacy alias)
 FLOAT_ALERT_GOAL_S = 10  # pill goal / pen hold
 FLOAT_ALERT_SUB_S = 5  # pill each substitution slide
 TIMELINE_IDLE_MS = 4000
-TIMELINE_LEAVE_MS = 1500
+TIMELINE_LEAVE_MS = 3000
 DRAG_THRESHOLD = 4
 MATCHDAY_ROLLOVER_HOUR = 6  # local hour when football "day" rolls over
 COACH_TIP_MS = 6500
